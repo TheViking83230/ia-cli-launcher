@@ -37,7 +37,7 @@
   "build": {
     "appId": "fr.devopa.ia-cli-launcher",
     "productName": "IA CLI Launcher",
-    "artifactName": "${productName}-${version}-${arch}.${ext}",
+    "artifactName": "IA-CLI-Launcher-${version}-${arch}.${ext}",
     "asar": true,
     "publish": [
       {
