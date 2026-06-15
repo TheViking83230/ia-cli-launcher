@@ -97,6 +97,8 @@ Pour qu'une nouvelle build soit reconnue comme une mise a jour, incrementer `ver
 
 L'application se met a jour seule via `electron-updater` et **GitHub Releases**. Au demarrage (puis toutes les 4 h), elle interroge le depot, telecharge la nouvelle version en arriere-plan et propose un bouton `Redemarrer pour installer`. Cela fonctionne sur **Windows (NSIS)** et **Linux (AppImage)**. Le `.deb` ne sait pas s'auto-mettre a jour : sous Linux, l'auto-update concerne le format AppImage.
 
+Une verification manuelle est aussi possible via le menu **Fichier > Verifier les mises a jour** : un bandeau indique la recherche en cours, puis « deja la derniere version » ou propose le telechargement si une mise a jour existe.
+
 ### Configuration (une seule fois)
 
 1. Le depot cible est `TheViking83230/ia-cli-launcher` (deja renseigne dans `package.json`, aux deux endroits : `repository.url` et `build.publish[0].owner`). Le creer sur GitHub s'il n'existe pas encore.

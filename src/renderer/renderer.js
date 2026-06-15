@@ -1381,16 +1381,29 @@ function handleUpdateStatus(payload) {
   const banner = elements.updateBanner;
   const installBtn = elements.updateInstallButton;
   const st = payload?.state;
+  const manual = Boolean(payload?.manual);
 
-  // Etats silencieux : on n'affiche rien.
-  if (st === "checking" || st === "none") {
+  // Verifications automatiques en arriere-plan : on reste silencieux pour
+  // "checking" et "none". Une verification manuelle (menu) affiche un retour.
+  if ((st === "checking" || st === "none") && !manual) {
     return;
   }
 
   installBtn.classList.add("hidden");
   banner.classList.remove("hidden", "error");
 
-  if (st === "available") {
+  if (st === "checking") {
+    elements.updateBannerText.textContent = "Recherche de mises à jour…";
+  } else if (st === "none") {
+    elements.updateBannerText.textContent =
+      `Vous avez déjà la dernière version (${state.app?.appVersion || ""}).`;
+    window.setTimeout(() => banner.classList.add("hidden"), 6000);
+  } else if (st === "dev") {
+    banner.classList.add("error");
+    elements.updateBannerText.textContent =
+      "Vérification disponible uniquement dans la version installée (pas en mode développement).";
+    window.setTimeout(() => banner.classList.add("hidden"), 6000);
+  } else if (st === "available") {
     elements.updateBannerText.textContent =
       `Mise à jour ${payload.version || ""} disponible — téléchargement en cours…`;
   } else if (st === "downloading") {

@@ -228,6 +228,8 @@ function setAppMenu() {
     {
       label: "Fichier",
       submenu: [
+        { label: "Vérifier les mises à jour", click: () => checkForUpdatesManual() },
+        { type: "separator" },
         { role: "quit", label: "Quitter" }
       ]
     },
@@ -641,6 +643,10 @@ function startShellSession(request) {
 }
 
 // --- Mise a jour automatique (electron-updater + GitHub Releases) ---------
+// Vrai pendant une verification declenchee manuellement (menu Fichier), pour
+// afficher un retour visible meme quand aucune mise a jour n'est disponible.
+let manualCheck = false;
+
 function setupAutoUpdater() {
   // En developpement, aucune source de mise a jour n'est disponible : on ignore.
   if (!app.isPackaged) {
@@ -651,13 +657,15 @@ function setupAutoUpdater() {
   autoUpdater.autoInstallOnAppQuit = true;
 
   autoUpdater.on("checking-for-update", () => {
-    sendToRenderer("update:status", { state: "checking" });
+    sendToRenderer("update:status", { state: "checking", manual: manualCheck });
   });
   autoUpdater.on("update-available", (info) => {
-    sendToRenderer("update:status", { state: "available", version: info?.version });
+    sendToRenderer("update:status", { state: "available", version: info?.version, manual: manualCheck });
+    manualCheck = false;
   });
   autoUpdater.on("update-not-available", () => {
-    sendToRenderer("update:status", { state: "none" });
+    sendToRenderer("update:status", { state: "none", manual: manualCheck });
+    manualCheck = false;
   });
   autoUpdater.on("download-progress", (progress) => {
     sendToRenderer("update:status", {
@@ -669,12 +677,28 @@ function setupAutoUpdater() {
     sendToRenderer("update:status", { state: "downloaded", version: info?.version });
   });
   autoUpdater.on("error", (error) => {
-    sendToRenderer("update:status", { state: "error", message: String(error?.message || error) });
+    sendToRenderer("update:status", { state: "error", message: String(error?.message || error), manual: manualCheck });
+    manualCheck = false;
   });
 
   autoUpdater.checkForUpdates().catch(() => {});
   // Verification periodique (toutes les 4 heures) tant que l'app reste ouverte.
   setInterval(() => autoUpdater.checkForUpdates().catch(() => {}), 4 * 60 * 60 * 1000);
+}
+
+// Verification manuelle declenchee par le menu Fichier > Verifier les mises a jour.
+function checkForUpdatesManual() {
+  if (!app.isPackaged) {
+    // En dev, l'updater est inactif : on previent l'utilisateur.
+    sendToRenderer("update:status", { state: "dev", manual: true });
+    return;
+  }
+  manualCheck = true;
+  sendToRenderer("update:status", { state: "checking", manual: true });
+  autoUpdater.checkForUpdates().catch((error) => {
+    sendToRenderer("update:status", { state: "error", message: String(error?.message || error), manual: true });
+    manualCheck = false;
+  });
 }
 
 app.whenReady().then(() => {
