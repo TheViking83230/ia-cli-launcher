@@ -93,7 +93,7 @@
         }
       ],
       "category": "Development",
-      "maintainer": "Dev OpA <sebmagbelge@gmail.com>",
+      "maintainer": "Dev OpA <noreply@devopa.fr>",
       "synopsis": "Lanceur de CLI IA avec onglets terminal",
       "description": "Lanceur multi-CLI (Claude Code, Codex, Gemini, etc.) avec onglets terminal."
     },
