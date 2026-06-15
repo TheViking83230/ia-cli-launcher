@@ -1,0 +1,243 @@
+<!doctype html>
+<html lang="fr">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>IA CLI Launcher</title>
+    <link rel="stylesheet" href="../../node_modules/@xterm/xterm/css/xterm.css" />
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div id="appShell" class="shell">
+      <aside class="sidebar">
+        <div class="brand">
+          <div class="brand-mark">
+            <svg viewBox="0 0 32 32" fill="none" aria-hidden="true">
+              <defs>
+                <linearGradient id="brandPrompt" x1="8" y1="8" x2="26" y2="26" gradientUnits="userSpaceOnUse">
+                  <stop offset="0" stop-color="#5eead4" />
+                  <stop offset="0.5" stop-color="#34d399" />
+                  <stop offset="1" stop-color="#22d3ee" />
+                </linearGradient>
+              </defs>
+              <g stroke="url(#brandPrompt)" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round">
+                <polyline points="9,9 17,16 9,23" />
+                <line x1="18.5" y1="23" x2="24" y2="23" />
+              </g>
+            </svg>
+          </div>
+          <div>
+            <h1>CLI Launcher</h1>
+            <p id="adminStatus">Verification admin...</p>
+          </div>
+        </div>
+
+        <section class="panel">
+          <div class="section-title">
+            <i data-lucide="folder-open"></i>
+            <span>Dossier</span>
+          </div>
+          <button id="chooseFolderButton" class="primary-button" type="button">
+            <i data-lucide="folder-plus"></i>
+            Choisir
+          </button>
+          <div id="folderPath" class="path-display empty">Aucun dossier choisi</div>
+        </section>
+
+        <section class="panel">
+          <div class="section-title">
+            <i data-lucide="square-terminal"></i>
+            <span>Nouvel onglet</span>
+          </div>
+
+          <label class="field">
+            <span>Titre</span>
+            <input id="tabTitleInput" type="text" value="Session IA" />
+          </label>
+
+          <label class="field">
+            <span>CLI</span>
+            <select id="profileSelect"></select>
+          </label>
+
+          <label class="field">
+            <span>Mode</span>
+            <select id="modeSelect"></select>
+          </label>
+
+          <label class="field">
+            <span>Arguments</span>
+            <input id="extraArgsInput" type="text" placeholder="Optionnel" />
+          </label>
+
+          <button id="launchButton" class="primary-button launch" type="button">
+            <i data-lucide="play"></i>
+            Lancer
+          </button>
+
+          <label class="switch-row" title="Rouvrir automatiquement les onglets ouverts à la dernière fermeture">
+            <input id="autoRestoreToggle" type="checkbox" />
+            <span>Restaurer les sessions au démarrage</span>
+          </label>
+        </section>
+
+        <section class="panel">
+          <div class="section-title split">
+            <span class="title-with-icon">
+              <i data-lucide="key-round"></i>
+              <span>Tokens</span>
+            </span>
+            <button id="refreshAuthButton" class="tiny-button" type="button" title="Actualiser">
+              <i data-lucide="refresh-cw"></i>
+            </button>
+          </div>
+          <div id="authStatusList" class="auth-status-list">
+            <div class="auth-empty">Verification...</div>
+          </div>
+        </section>
+
+        <section class="panel compact">
+          <div class="section-title">
+            <i data-lucide="settings-2"></i>
+            <span>Profil actif</span>
+          </div>
+          <div class="button-row trio">
+            <button id="favoriteProfileButton" class="ghost-button" type="button">
+              <i data-lucide="star"></i>
+              Favori
+            </button>
+            <button id="installProfileButton" class="ghost-button" type="button">
+              <i data-lucide="download"></i>
+              Installer
+            </button>
+            <button id="docsProfileButton" class="ghost-button" type="button">
+              <i data-lucide="book-open"></i>
+              Docs
+            </button>
+          </div>
+          <label class="field">
+            <span>Commande</span>
+            <input id="commandInput" type="text" />
+          </label>
+          <label class="field">
+            <span>Args du mode</span>
+            <input id="modeArgsInput" type="text" />
+          </label>
+          <label class="field">
+            <span>Installation</span>
+            <input id="installCommandInput" type="text" />
+          </label>
+          <label class="field">
+            <span>Documentation</span>
+            <input id="docsUrlInput" type="text" />
+          </label>
+          <div class="button-row">
+            <button id="saveProfileButton" class="ghost-button" type="button">
+              <i data-lucide="save"></i>
+              Sauver
+            </button>
+            <button id="addProfileButton" class="ghost-button" type="button">
+              <i data-lucide="plus"></i>
+              Ajouter
+            </button>
+          </div>
+          <div class="button-row">
+            <button id="resetProfilesButton" class="ghost-button danger" type="button">
+              <i data-lucide="rotate-ccw"></i>
+              Reset
+            </button>
+            <button id="deleteProfileButton" class="ghost-button danger" type="button">
+              <i data-lucide="trash-2"></i>
+              Supprimer
+            </button>
+          </div>
+          <div id="commandStatus" class="status-line"></div>
+        </section>
+      </aside>
+
+      <main class="workspace">
+        <header class="topbar">
+          <div>
+            <div class="eyebrow">Sessions</div>
+            <div class="title-edit-row">
+              <input id="activeTitleInput" class="active-title" type="text" value="Aucun onglet" disabled />
+              <button id="renameActiveTabButton" class="icon-button" type="button" title="Renommer l'onglet" disabled>
+                <i data-lucide="pencil"></i>
+              </button>
+            </div>
+          </div>
+          <div class="toolbar">
+            <button id="historyButton" class="icon-button" type="button" title="Historique global">
+              <i data-lucide="history"></i>
+            </button>
+            <button id="toggleSidebarButton" class="icon-button" type="button" title="Masquer le menu">
+              <i data-lucide="panel-left-close"></i>
+            </button>
+          </div>
+        </header>
+
+        <div id="tabs" class="tabs"></div>
+
+        <div id="terminalHost" class="terminal-host">
+          <div id="emptyState" class="empty-state">
+            <i data-lucide="terminal"></i>
+            <span>Choisis un dossier, un CLI et lance un onglet.</span>
+          </div>
+        </div>
+
+        <footer class="footer">
+          <span id="sessionMeta">Pret</span>
+          <span id="shellLabel">PowerShell</span>
+        </footer>
+      </main>
+    </div>
+
+    <div id="updateBanner" class="update-banner hidden">
+      <i data-lucide="download-cloud"></i>
+      <span id="updateBannerText"></span>
+      <button id="updateInstallButton" class="update-install-btn hidden" type="button">Redémarrer pour installer</button>
+      <button id="updateBannerClose" class="restore-toast-close" type="button" title="Fermer">×</button>
+    </div>
+
+    <div id="historyModal" class="history-modal hidden">
+      <div class="history-backdrop" data-close-history></div>
+      <div class="history-dialog" role="dialog" aria-modal="true" aria-label="Historique global">
+        <header class="history-header">
+          <div class="history-title">
+            <i data-lucide="history"></i>
+            <span>Historique global</span>
+          </div>
+          <div class="history-search">
+            <i data-lucide="search"></i>
+            <input id="historySearchInput" type="text" placeholder="Rechercher (titre, dossier, commande, contenu)" />
+          </div>
+          <button id="historyClearButton" class="ghost-button danger" type="button" title="Tout effacer">
+            <i data-lucide="trash-2"></i>
+            Vider
+          </button>
+          <button class="icon-button" type="button" title="Fermer" data-close-history>
+            <i data-lucide="x"></i>
+          </button>
+        </header>
+        <div class="history-body">
+          <div id="historyList" class="history-list"></div>
+          <div class="history-viewer">
+            <div id="historyViewerMeta" class="history-viewer-meta">Sélectionne une session à gauche.</div>
+            <div id="historyViewerContent" class="history-viewer-content"></div>
+            <div class="history-viewer-actions">
+              <button id="historyResumeButton" class="primary-button" type="button" disabled>
+                <i data-lucide="rotate-cw"></i>
+                Reprendre cette session
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <script src="../../node_modules/lucide/dist/umd/lucide.js"></script>
+    <script src="../../node_modules/@xterm/xterm/lib/xterm.js"></script>
+    <script src="../../node_modules/@xterm/addon-fit/lib/addon-fit.js"></script>
+    <script src="./renderer.js"></script>
+  </body>
+</html>

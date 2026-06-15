@@ -1,0 +1,370 @@
+const isWindows = process.platform === "win32";
+
+// Choisit la valeur adaptee a la plateforme courante.
+function pick(winValue, linuxValue) {
+  return isWindows ? winValue : linuxValue;
+}
+
+// Installe une CLI npm en global.
+// Sous Windows : npm est suppose present (fourni avec Node.js).
+// Sous Linux : si npm est absent, on amorce Node.js (LTS) via NodeSource/apt
+// (mot de passe sudo demande dans le terminal), puis on installe en sudo.
+function npmGlobalInstall(pkg) {
+  return pick(
+    `npm install -g ${pkg}`,
+    "if ! command -v npm >/dev/null 2>&1; then " +
+      "echo '==> Node.js absent : installation via NodeSource (mot de passe sudo requis)...'; " +
+      "sudo apt-get update && sudo apt-get install -y ca-certificates curl gnupg && " +
+      "curl -fsSL https://deb.nodesource.com/setup_lts.x | sudo -E bash - && " +
+      "sudo apt-get install -y nodejs; " +
+      "fi && " +
+      `sudo npm install -g ${pkg}`
+  );
+}
+
+// Commande pre-lancement OpenCode (cree opencode.json si absent), par OS.
+const opencodeGrantPreLaunch = pick(
+  "powershell -NoProfile -ExecutionPolicy Bypass -Command \"if (Test-Path -LiteralPath 'opencode.json') { Write-Host 'opencode.json existe deja; aucune modification automatique.' } else { [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('eyIkc2NoZW1hIjoiaHR0cHM6Ly9vcGVuY29kZS5haS9jb25maWcuanNvbiIsInBlcm1pc3Npb24iOiJhbGxvdyJ9')) | Set-Content -LiteralPath 'opencode.json' -Encoding UTF8 }\"",
+  "if [ -f opencode.json ]; then echo 'opencode.json existe deja; aucune modification automatique.'; else printf '%s' '{\"$schema\":\"https://opencode.ai/config.json\",\"permission\":\"allow\"}' > opencode.json; fi"
+);
+
+const defaultProfiles = [
+  {
+    id: "claude",
+    label: "Claude Code",
+    command: "claude",
+    accent: "#8b5cf6",
+    favorite: true,
+    docsUrl: "https://code.claude.com/docs/en/cli-reference",
+    installCommand: npmGlobalInstall("@anthropic-ai/claude-code"),
+    // Reprise de la derniere conversation dans le dossier courant.
+    resume: { args: ["--continue"] },
+    authChecks: {
+      env: ["ANTHROPIC_API_KEY"],
+      files: [
+        { label: "Claude config", path: pick("~\\.claude.json", "~/.claude.json") },
+        { label: "Claude dossier", path: pick("~\\.claude", "~/.claude") }
+      ]
+    },
+    defaultModeId: "standard",
+    modes: [
+      {
+        id: "standard",
+        label: "Standard",
+        args: []
+      },
+      {
+        id: "grant-access",
+        label: "Grant access",
+        args: ["--dangerously-skip-permissions"]
+      },
+      {
+        id: "auto",
+        label: "Auto",
+        args: ["--permission-mode", "auto"]
+      },
+      {
+        id: "plan",
+        label: "Plan",
+        args: ["--permission-mode", "plan"]
+      },
+      {
+        id: "continue",
+        label: "Continuer",
+        args: ["--continue"]
+      }
+    ]
+  },
+  {
+    id: "codex",
+    label: "OpenAI Codex",
+    command: "codex",
+    accent: "#10b981",
+    favorite: true,
+    docsUrl: "https://developers.openai.com/codex/cli/reference",
+    installCommand: npmGlobalInstall("@openai/codex"),
+    // "resume --last" est une sous-commande : elle remplace les args de mode.
+    resume: { args: ["resume", "--last"], replace: true },
+    authChecks: {
+      env: ["OPENAI_API_KEY"],
+      files: [
+        { label: "Codex auth", path: pick("~\\.codex\\auth.json", "~/.codex/auth.json") },
+        { label: "Codex config", path: pick("~\\.codex\\config.toml", "~/.codex/config.toml") }
+      ]
+    },
+    defaultModeId: "grant-workspace",
+    modes: [
+      {
+        id: "standard",
+        label: "Standard",
+        args: []
+      },
+      {
+        id: "grant-workspace",
+        label: "Grant dossier",
+        args: ["--sandbox", "workspace-write", "--ask-for-approval", "never"]
+      },
+      {
+        id: "danger-full",
+        label: "Danger total",
+        args: ["--dangerously-bypass-approvals-and-sandbox"]
+      },
+      {
+        id: "read-only",
+        label: "Lecture seule",
+        args: ["--sandbox", "read-only"]
+      },
+      {
+        id: "web-search",
+        label: "Web search",
+        args: ["--search"]
+      }
+    ]
+  },
+  {
+    id: "gemini",
+    label: "Gemini CLI",
+    command: "gemini",
+    accent: "#0ea5e9",
+    favorite: false,
+    docsUrl: "https://google-gemini.github.io/gemini-cli/docs/get-started/configuration.html",
+    installCommand: npmGlobalInstall("@google/gemini-cli"),
+    authChecks: {
+      env: ["GEMINI_API_KEY", "GOOGLE_API_KEY"],
+      files: [
+        { label: "Gemini auth", path: pick("~\\.gemini\\oauth_creds.json", "~/.gemini/oauth_creds.json") },
+        { label: "Gemini config", path: pick("~\\.gemini\\settings.json", "~/.gemini/settings.json") }
+      ]
+    },
+    defaultModeId: "standard",
+    modes: [
+      {
+        id: "standard",
+        label: "Standard",
+        args: []
+      },
+      {
+        id: "grant-access",
+        label: "Grant access",
+        args: ["--approval-mode=yolo"]
+      },
+      {
+        id: "auto-edit",
+        label: "Auto edit",
+        args: ["--approval-mode=auto_edit"]
+      },
+      {
+        id: "sandbox",
+        label: "Sandbox",
+        args: ["--sandbox"]
+      },
+      {
+        id: "all-files",
+        label: "Tout contexte",
+        args: ["--all-files"]
+      }
+    ]
+  },
+  {
+    id: "qwen",
+    label: "Qwen Code",
+    command: "qwen",
+    accent: "#f59e0b",
+    favorite: false,
+    docsUrl: "https://qwenlm.github.io/qwen-code-docs/en/users/features/approval-mode/",
+    installCommand: npmGlobalInstall("@qwen-code/qwen-code@latest"),
+    authChecks: {
+      env: ["DASHSCOPE_API_KEY", "OPENAI_API_KEY"],
+      files: [
+        { label: "Qwen auth", path: pick("~\\.qwen\\oauth_creds.json", "~/.qwen/oauth_creds.json") },
+        { label: "Qwen config", path: pick("~\\.qwen\\settings.json", "~/.qwen/settings.json") }
+      ]
+    },
+    defaultModeId: "standard",
+    modes: [
+      {
+        id: "standard",
+        label: "Standard",
+        args: []
+      },
+      {
+        id: "grant-access",
+        label: "Grant access",
+        args: ["--approval-mode", "yolo"]
+      },
+      {
+        id: "auto-edit",
+        label: "Auto edit",
+        args: ["--approval-mode", "auto-edit"]
+      },
+      {
+        id: "plan",
+        label: "Plan",
+        args: ["--approval-mode", "plan"]
+      }
+    ]
+  },
+  {
+    id: "aider",
+    label: "Aider",
+    command: "aider",
+    accent: "#ef4444",
+    favorite: false,
+    docsUrl: "https://aider.chat/docs/config/options.html",
+    // Aider relit l'historique de chat du depot au demarrage.
+    resume: { args: ["--restore-chat-history"] },
+    installCommand: pick(
+      "powershell -NoProfile -ExecutionPolicy Bypass -Command \"irm https://aider.chat/install.ps1 | iex\"",
+      "curl -LsSf https://aider.chat/install.sh | sh"
+    ),
+    authChecks: {
+      env: [
+        "OPENAI_API_KEY",
+        "ANTHROPIC_API_KEY",
+        "GEMINI_API_KEY",
+        "GOOGLE_API_KEY",
+        "OPENROUTER_API_KEY",
+        "DEEPSEEK_API_KEY",
+        "GROQ_API_KEY"
+      ],
+      files: [
+        { label: "Aider config", path: pick("~\\.aider.conf.yml", "~/.aider.conf.yml") }
+      ]
+    },
+    defaultModeId: "standard",
+    modes: [
+      {
+        id: "standard",
+        label: "Standard",
+        args: []
+      },
+      {
+        id: "grant-access",
+        label: "Grant access",
+        args: ["--yes-always"]
+      },
+      {
+        id: "browser",
+        label: "Browser",
+        args: ["--browser"]
+      },
+      {
+        id: "auto-test",
+        label: "Auto test",
+        args: ["--auto-test"]
+      },
+      {
+        id: "dry-run",
+        label: "Dry run",
+        args: ["--dry-run"]
+      }
+    ]
+  },
+  {
+    id: "opencode",
+    label: "OpenCode",
+    command: "opencode",
+    accent: "#06b6d4",
+    favorite: false,
+    docsUrl: "https://opencode.ai/docs/permissions/",
+    installCommand: npmGlobalInstall("opencode-ai"),
+    // Reprend la derniere session OpenCode.
+    resume: { args: ["--continue"] },
+    authChecks: {
+      env: ["ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY"],
+      files: [
+        { label: "OpenCode auth", path: pick("~\\.config\\opencode\\auth.json", "~/.config/opencode/auth.json") },
+        { label: "OpenCode data", path: pick("%APPDATA%\\opencode\\auth.json", "~/.local/share/opencode/auth.json") }
+      ]
+    },
+    defaultModeId: "standard",
+    modes: [
+      {
+        id: "standard",
+        label: "Standard",
+        args: []
+      },
+      {
+        id: "grant-access",
+        label: "Grant access",
+        args: [],
+        preLaunchCommands: [opencodeGrantPreLaunch]
+      },
+      {
+        id: "web",
+        label: "Web",
+        args: ["web"]
+      }
+    ]
+  },
+  {
+    id: "cursor",
+    label: "Cursor Agent",
+    command: "cursor-agent",
+    accent: "#eab308",
+    favorite: false,
+    docsUrl: "https://docs.cursor.com/en/cli/reference/parameters",
+    // "resume" est une sous-commande : elle remplace les args de mode.
+    resume: { args: ["resume"], replace: true },
+    installCommand: pick(
+      "wsl bash -lc \"curl https://cursor.com/install -fsS | bash\"",
+      "curl https://cursor.com/install -fsS | bash"
+    ),
+    authChecks: {
+      env: ["CURSOR_API_KEY"],
+      files: [
+        { label: "Cursor config", path: pick("~\\.cursor", "~/.cursor") },
+        { label: "Cursor data", path: pick("%APPDATA%\\Cursor", "~/.config/Cursor") }
+      ]
+    },
+    defaultModeId: "standard",
+    modes: [
+      {
+        id: "standard",
+        label: "Standard",
+        args: []
+      },
+      {
+        id: "grant-access",
+        label: "Grant access",
+        args: ["--force"]
+      },
+      {
+        id: "print",
+        label: "Print",
+        args: ["--print", "--output-format", "text"]
+      }
+    ]
+  },
+  {
+    id: "amp",
+    label: "Amp",
+    command: "amp",
+    accent: "#ec4899",
+    favorite: false,
+    docsUrl: "https://ampcode.com/manual",
+    installCommand: npmGlobalInstall("@sourcegraph/amp"),
+    authChecks: {
+      env: ["AMP_API_KEY"],
+      files: [
+        { label: "Amp config", path: pick("~\\.amp", "~/.amp") },
+        { label: "Amp data", path: pick("%APPDATA%\\amp", "~/.config/amp") }
+      ]
+    },
+    defaultModeId: "standard",
+    modes: [
+      {
+        id: "standard",
+        label: "Standard",
+        args: []
+      },
+      {
+        id: "login",
+        label: "Login",
+        args: ["login"]
+      }
+    ]
+  }
+];
+
+module.exports = { defaultProfiles };
