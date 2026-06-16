@@ -40,6 +40,7 @@ const elements = {
   toggleSidebarButton: document.getElementById("toggleSidebarButton"),
   sessionMeta: document.getElementById("sessionMeta"),
   historyButton: document.getElementById("historyButton"),
+  shortcutsButton: document.getElementById("shortcutsButton"),
   historyModal: document.getElementById("historyModal"),
   historySearchInput: document.getElementById("historySearchInput"),
   historyClearButton: document.getElementById("historyClearButton"),
@@ -348,26 +349,85 @@ const TERMINAL_THEME = {
 function getTerminalGlobals() {
   return {
     TerminalCtor: window.Terminal,
-    FitAddonCtor: window.FitAddon?.FitAddon
+    FitAddonCtor: window.FitAddon?.FitAddon,
+    SearchAddonCtor: window.SearchAddon?.SearchAddon
   };
 }
 
+// --- Taille de police du terminal (zoom) -----------------------------------
+const FONT_MIN = 8;
+const FONT_MAX = 28;
+const FONT_DEFAULT = 13;
+
+function getTerminalFontSize() {
+  const value = parseInt(window.localStorage.getItem("terminalFontSize"), 10);
+  return Number.isFinite(value) && value >= FONT_MIN && value <= FONT_MAX ? value : FONT_DEFAULT;
+}
+
+// Applique une taille de police a tous les terminaux ouverts et la persiste.
+function applyTerminalFontSize(size) {
+  const clamped = Math.max(FONT_MIN, Math.min(FONT_MAX, size));
+  window.localStorage.setItem("terminalFontSize", String(clamped));
+  // La taille s'applique a tous les terminaux ; seul l'onglet visible est
+  // re-ajuste maintenant (les autres le seront a leur activation, fit() sur un
+  // conteneur masque etant peu fiable).
+  for (const session of state.sessions.values()) {
+    session.terminal.options.fontSize = clamped;
+  }
+  const active = state.sessions.get(state.activeSessionId);
+  if (active) {
+    active.fitAddon.fit();
+    window.launcher.resizeTerminal(active.id, active.terminal.cols, active.terminal.rows);
+  }
+  return clamped;
+}
+
+function changeTerminalFontSize(delta) {
+  if (!state.sessions.size) {
+    flashStatus("Aucun terminal ouvert.");
+    return;
+  }
+  const next = applyTerminalFontSize(getTerminalFontSize() + delta);
+  flashStatus(`Police du terminal : ${next} px`);
+}
+
+function resetTerminalFontSize() {
+  applyTerminalFontSize(FONT_DEFAULT);
+  flashStatus(`Police du terminal : ${FONT_DEFAULT} px`);
+}
+
+// Message bref dans la barre de statut, restaure ensuite l'info de la session.
+let statusRestoreTimer = null;
+function flashStatus(message) {
+  elements.sessionMeta.textContent = message;
+  window.clearTimeout(statusRestoreTimer);
+  statusRestoreTimer = window.setTimeout(() => {
+    const active = state.sessions.get(state.activeSessionId);
+    elements.sessionMeta.textContent = active ? `${active.command} | ${active.cwd}` : "Pret";
+  }, 1800);
+}
+
 function createTerminal() {
-  const { TerminalCtor, FitAddonCtor } = getTerminalGlobals();
+  const { TerminalCtor, FitAddonCtor, SearchAddonCtor } = getTerminalGlobals();
   const terminal = new TerminalCtor({
     cursorBlink: true,
     cursorStyle: "bar",
     convertEol: true,
     copyOnSelect: true,
     fontFamily: "Cascadia Mono, Consolas, monospace",
-    fontSize: 13,
+    fontSize: getTerminalFontSize(),
     lineHeight: 1.2,
     scrollback: 10000,
     theme: TERMINAL_THEME
   });
   const fitAddon = new FitAddonCtor();
   terminal.loadAddon(fitAddon);
-  return { terminal, fitAddon };
+  let searchAddon = null;
+  if (SearchAddonCtor) {
+    searchAddon = new SearchAddonCtor();
+    terminal.loadAddon(searchAddon);
+  }
+  return { terminal, fitAddon, searchAddon };
 }
 
 // Terminal en lecture seule pour la visionneuse d'historique : conserve les
@@ -550,6 +610,10 @@ async function closeSession(id) {
     return;
   }
 
+  if (session.spec) {
+    lastClosedSpec = { ...session.spec, title: session.title };
+  }
+
   await window.launcher.killTerminal(id);
   session.terminal.dispose();
   session.tab.remove();
@@ -574,8 +638,8 @@ function registerSession(session) {
   setActiveSession(session.id);
 }
 
-async function openTerminalSession({ title, accent, starter, replayText }) {
-  const { terminal, fitAddon } = createTerminal();
+async function openTerminalSession({ title, accent, starter, replayText, spec }) {
+  const { terminal, fitAddon, searchAddon } = createTerminal();
   let startResult;
 
   try {
@@ -593,7 +657,9 @@ async function openTerminalSession({ title, accent, starter, replayText }) {
     cwd: startResult.cwd,
     terminal,
     fitAddon,
+    searchAddon,
     accent,
+    spec: spec || null,
     tab: null,
     container: createTerminalContainer(startResult.id)
   };
@@ -661,10 +727,24 @@ async function restoreSession(saved) {
     }
   }
 
+  // Spec de relance (dupliquer / relancer / rouvrir) si le profil existe.
+  const spec = profile && mode
+    ? {
+        kind: "profile",
+        title: saved.title,
+        accent: profile.accent,
+        profileId: saved.profileId,
+        modeId: saved.modeId,
+        extraArgs: saved.extraArgs || "",
+        cwd: saved.cwd
+      }
+    : null;
+
   await openTerminalSession({
     title: saved.title,
     accent: profile?.accent || "#10b981",
     replayText,
+    spec,
     starter: ({ cols, rows }) => {
       if (profile && mode) {
         return window.launcher.startTerminal({
@@ -675,6 +755,7 @@ async function restoreSession(saved) {
           extraArgs: saved.extraArgs || "",
           resumeArgs: resume?.args || [],
           resumeReplace: Boolean(resume?.replace),
+          resumeId: saved.id,
           cwd: saved.cwd,
           profileId: saved.profileId,
           profileLabel: saved.profileLabel,
@@ -690,6 +771,7 @@ async function restoreSession(saved) {
         title: saved.title,
         commandLine: saved.commandLine,
         cwd: saved.cwd,
+        resumeId: saved.id,
         profileId: saved.profileId,
         profileLabel: saved.profileLabel,
         modeId: saved.modeId,
@@ -779,6 +861,50 @@ function renderRestoreSection(savedSessions) {
   elements.emptyState.appendChild(section);
 }
 
+// Lance une session a partir d'un profil/mode/dossier. Centralise pour etre
+// reutilise par le bouton "Lancer" comme par les raccourcis (dupliquer,
+// relancer, rouvrir la derniere session fermee).
+async function launchFromProfile({ profileId, modeId, extraArgs, cwd, title, accent }) {
+  const profile = state.config.profiles.find((p) => p.id === profileId);
+  const mode = profile?.modes.find((m) => m.id === modeId);
+  if (!profile || !mode) {
+    flashStatus("Profil indisponible pour cette action.");
+    return;
+  }
+
+  const finalTitle = title || profile.label;
+  const spec = {
+    kind: "profile",
+    title: finalTitle,
+    accent: accent || profile.accent,
+    profileId,
+    modeId,
+    extraArgs: extraArgs || "",
+    cwd
+  };
+
+  await openTerminalSession({
+    title: finalTitle,
+    accent: spec.accent,
+    spec,
+    starter: ({ cols, rows }) =>
+      window.launcher.startTerminal({
+        title: finalTitle,
+        command: profile.command,
+        modeArgs: mode.args || [],
+        preLaunchCommands: mode.preLaunchCommands || [],
+        extraArgs: extraArgs || "",
+        cwd,
+        profileId: profile.id,
+        profileLabel: profile.label,
+        modeId: mode.id,
+        modeLabel: mode.label,
+        cols,
+        rows
+      })
+  });
+}
+
 async function launchSession() {
   const profile = getSelectedProfile();
   const mode = getSelectedMode();
@@ -794,25 +920,79 @@ async function launchSession() {
   }
 
   const title = elements.tabTitleInput.value.trim() || profile.label;
-  await openTerminalSession({
+  await launchFromProfile({
+    profileId: profile.id,
+    modeId: mode.id,
+    extraArgs: elements.extraArgsInput.value,
+    cwd: state.selectedFolder,
     title,
-    accent: profile.accent,
-    starter: ({ cols, rows }) =>
-      window.launcher.startTerminal({
-        title,
-        command: profile.command,
-        modeArgs: mode.args || [],
-        preLaunchCommands: mode.preLaunchCommands || [],
-        extraArgs: elements.extraArgsInput.value,
-        cwd: state.selectedFolder,
-        profileId: profile.id,
-        profileLabel: profile.label,
-        modeId: mode.id,
-        modeLabel: mode.label,
-        cols,
-        rows
-      })
+    accent: profile.accent
   });
+}
+
+// --- Actions onglets (utilisees par les raccourcis clavier) ----------------
+function orderedSessionIds() {
+  return [...state.sessions.keys()];
+}
+
+function cycleTab(direction) {
+  const ids = orderedSessionIds();
+  if (ids.length <= 1) {
+    return;
+  }
+  const index = ids.indexOf(state.activeSessionId);
+  const next = ids[(index + direction + ids.length) % ids.length];
+  setActiveSession(next);
+}
+
+function gotoTab(position) {
+  const id = orderedSessionIds()[position - 1];
+  if (id) {
+    setActiveSession(id);
+  }
+}
+
+function focusRenameActive() {
+  if (!state.activeSessionId) {
+    return;
+  }
+  elements.activeTitleInput.focus();
+  elements.activeTitleInput.select();
+}
+
+function duplicateSession(id) {
+  const session = state.sessions.get(id);
+  if (!session?.spec || session.spec.kind !== "profile") {
+    flashStatus("Duplication indisponible pour cet onglet.");
+    return;
+  }
+  launchFromProfile({ ...session.spec, title: `${session.title} (copie)` });
+}
+
+async function relaunchSession(id) {
+  const session = state.sessions.get(id);
+  if (!session?.spec || session.spec.kind !== "profile") {
+    flashStatus("Relance indisponible pour cet onglet.");
+    return;
+  }
+  const spec = session.spec;
+  const title = session.title;
+  await closeSession(id);
+  await launchFromProfile({ ...spec, title });
+}
+
+// Derniere session fermee, pour la rouvrir au clavier.
+let lastClosedSpec = null;
+function reopenLastClosed() {
+  if (!lastClosedSpec) {
+    flashStatus("Aucune session récente à rouvrir.");
+    return;
+  }
+  if (lastClosedSpec.kind === "profile") {
+    launchFromProfile(lastClosedSpec);
+  } else {
+    flashStatus("Réouverture indisponible pour cette session.");
+  }
 }
 
 async function installSelectedProfile() {
@@ -940,6 +1120,534 @@ async function deleteCustomProfile() {
   refreshAuthStatus();
 }
 
+// --- Recherche dans le terminal (addon-search) -----------------------------
+let searchBar = null;
+
+function ensureSearchBar() {
+  if (searchBar) {
+    return searchBar;
+  }
+  const bar = document.createElement("div");
+  bar.className = "term-search hidden";
+  bar.innerHTML = `
+    <input type="text" class="term-search-input" placeholder="Rechercher dans le terminal…" />
+    <button class="term-search-btn" data-dir="prev" type="button" title="Précédent (Maj+Entrée)">↑</button>
+    <button class="term-search-btn" data-dir="next" type="button" title="Suivant (Entrée)">↓</button>
+    <button class="term-search-btn" data-close type="button" title="Fermer (Échap)">×</button>
+  `;
+  document.body.appendChild(bar);
+
+  const input = bar.querySelector(".term-search-input");
+  const run = (dir) => {
+    const term = input.value;
+    const session = state.sessions.get(state.activeSessionId);
+    if (!session?.searchAddon || !term) {
+      return;
+    }
+    if (dir === "prev") {
+      session.searchAddon.findPrevious(term);
+    } else {
+      session.searchAddon.findNext(term);
+    }
+  };
+
+  input.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      run(event.shiftKey ? "prev" : "next");
+    } else if (event.key === "Escape") {
+      event.preventDefault();
+      closeTerminalSearch();
+    }
+    event.stopPropagation();
+  });
+  input.addEventListener("input", () => run("next"));
+  bar.querySelector("[data-dir=prev]").addEventListener("click", () => run("prev"));
+  bar.querySelector("[data-dir=next]").addEventListener("click", () => run("next"));
+  bar.querySelector("[data-close]").addEventListener("click", closeTerminalSearch);
+
+  searchBar = bar;
+  return bar;
+}
+
+function openTerminalSearch() {
+  const session = state.sessions.get(state.activeSessionId);
+  if (!session?.searchAddon) {
+    flashStatus("Recherche indisponible dans ce terminal.");
+    return;
+  }
+  const bar = ensureSearchBar();
+  bar.classList.remove("hidden");
+  const input = bar.querySelector(".term-search-input");
+  input.focus();
+  input.select();
+}
+
+function closeTerminalSearch() {
+  if (searchBar) {
+    searchBar.classList.add("hidden");
+  }
+  const session = state.sessions.get(state.activeSessionId);
+  session?.searchAddon?.clearDecorations?.();
+  session?.terminal?.focus();
+}
+
+// --- Raccourcis clavier : registre, defaut, persistance, dispatch ----------
+const SHORTCUT_ACTIONS = [
+  { id: "newTab", label: "Nouvelle session", category: "Onglets", run: () => launchSession() },
+  { id: "closeTab", label: "Fermer l'onglet actif", category: "Onglets", run: () => state.activeSessionId && closeSession(state.activeSessionId) },
+  { id: "nextTab", label: "Onglet suivant", category: "Onglets", run: () => cycleTab(1) },
+  { id: "prevTab", label: "Onglet précédent", category: "Onglets", run: () => cycleTab(-1) },
+  { id: "reopenTab", label: "Rouvrir la dernière session fermée", category: "Onglets", run: () => reopenLastClosed() },
+  { id: "duplicateTab", label: "Dupliquer l'onglet", category: "Onglets", run: () => state.activeSessionId && duplicateSession(state.activeSessionId) },
+  { id: "relaunchTab", label: "Relancer l'onglet (nouvelle session)", category: "Onglets", run: () => state.activeSessionId && relaunchSession(state.activeSessionId) },
+  { id: "renameTab", label: "Renommer l'onglet actif", category: "Onglets", run: () => focusRenameActive() },
+  { id: "toggleSidebar", label: "Afficher / masquer le menu", category: "Navigation", run: () => setSidebarCollapsed(!elements.appShell.classList.contains("sidebar-collapsed")) },
+  { id: "openHistory", label: "Ouvrir l'historique global", category: "Navigation", run: () => openHistory() },
+  { id: "openShortcuts", label: "Réglages des raccourcis", category: "Navigation", run: () => openShortcutsModal() },
+  { id: "showHelp", label: "Aide : liste des raccourcis", category: "Navigation", run: () => openHelpOverlay() },
+  { id: "zoomIn", label: "Agrandir la police du terminal", category: "Terminal", run: () => changeTerminalFontSize(1) },
+  { id: "zoomOut", label: "Réduire la police du terminal", category: "Terminal", run: () => changeTerminalFontSize(-1) },
+  { id: "zoomReset", label: "Police du terminal par défaut", category: "Terminal", run: () => resetTerminalFontSize() },
+  { id: "findInTerminal", label: "Rechercher dans le terminal", category: "Terminal", run: () => openTerminalSearch() }
+];
+
+const DEFAULT_KEYBINDINGS = {
+  newTab: "Ctrl+T",
+  closeTab: "Ctrl+W",
+  nextTab: "Ctrl+Tab",
+  prevTab: "Ctrl+Shift+Tab",
+  reopenTab: "Ctrl+Shift+T",
+  duplicateTab: "Ctrl+Shift+D",
+  relaunchTab: "Ctrl+Shift+R",
+  renameTab: "F2",
+  toggleSidebar: "Ctrl+B",
+  openHistory: "Ctrl+Shift+H",
+  openShortcuts: "Ctrl+,",
+  showHelp: "F1",
+  zoomIn: "Ctrl+=",
+  zoomOut: "Ctrl+-",
+  zoomReset: "Ctrl+0",
+  findInTerminal: "Ctrl+Shift+F"
+};
+
+// keybindings : actionId -> chord ("" = desactive). Charge depuis localStorage,
+// fusionne avec les valeurs par defaut (on ne stocke que les differences).
+let keybindings = loadKeybindings();
+
+function loadKeybindings() {
+  const merged = { ...DEFAULT_KEYBINDINGS };
+  try {
+    const saved = JSON.parse(window.localStorage.getItem("keybindings") || "{}");
+    for (const [id, chord] of Object.entries(saved)) {
+      if (id in DEFAULT_KEYBINDINGS) {
+        merged[id] = String(chord || "");
+      }
+    }
+  } catch {}
+  return merged;
+}
+
+function saveKeybindings() {
+  const diff = {};
+  for (const [id, chord] of Object.entries(keybindings)) {
+    if (chord !== DEFAULT_KEYBINDINGS[id]) {
+      diff[id] = chord;
+    }
+  }
+  window.localStorage.setItem("keybindings", JSON.stringify(diff));
+}
+
+function resetKeybindings() {
+  keybindings = { ...DEFAULT_KEYBINDINGS };
+  window.localStorage.removeItem("keybindings");
+}
+
+// Touche principale d'un evenement, basee sur event.code pour rester fiable
+// quelle que soit la disposition clavier (AZERTY inclus : les chiffres et
+// symboles ne dependent pas de Maj/AltGr).
+function mainKeyFromEvent(event) {
+  const code = event.code || "";
+  if (/^Digit[0-9]$/.test(code)) {
+    return code.slice(5);
+  }
+  if (/^Key[A-Z]$/.test(code)) {
+    return code.slice(3);
+  }
+  const codeMap = {
+    Equal: "=", Minus: "-", Comma: ",", Period: ".", Slash: "/",
+    Semicolon: ";", Backquote: "`", Space: "Space"
+  };
+  if (code in codeMap) {
+    return codeMap[code];
+  }
+  const key = event.key;
+  if (!key || ["Control", "Shift", "Alt", "Meta"].includes(key)) {
+    return "";
+  }
+  if (key === " ") {
+    return "Space";
+  }
+  if (/^F\d{1,2}$/.test(key)) {
+    return key;
+  }
+  const named = [
+    "Tab", "Enter", "Escape", "Backspace", "Delete", "Insert",
+    "Home", "End", "PageUp", "PageDown",
+    "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"
+  ];
+  if (named.includes(key)) {
+    return key;
+  }
+  return key.length === 1 ? key.toUpperCase() : key;
+}
+
+function eventToChord(event) {
+  const key = mainKeyFromEvent(event);
+  if (!key) {
+    return "";
+  }
+  const parts = [];
+  if (event.ctrlKey || event.metaKey) {
+    parts.push("Ctrl");
+  }
+  if (event.altKey) {
+    parts.push("Alt");
+  }
+  if (event.shiftKey) {
+    parts.push("Shift");
+  }
+  parts.push(key);
+  return parts.join("+");
+}
+
+function chordToActionId(chord) {
+  if (!chord) {
+    return null;
+  }
+  for (const [id, value] of Object.entries(keybindings)) {
+    if (value && value === chord) {
+      return id;
+    }
+  }
+  return null;
+}
+
+function isEditableTarget(target) {
+  return Boolean(target) && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable);
+}
+
+// Callback actif uniquement pendant la capture d'un raccourci (reglages).
+let chordCaptureCallback = null;
+
+function handleShortcut(event) {
+  const chord = eventToChord(event);
+  if (!chord) {
+    return false;
+  }
+
+  // Dans un champ texte, on ne deroute pas les frappes "simples" (sans Ctrl/Alt
+  // ni touche de fonction) pour ne pas empecher la saisie.
+  const hasModifier = event.ctrlKey || event.altKey || event.metaKey;
+  const isFunctionKey = /^F\d/.test(chord);
+  if (isEditableTarget(event.target) && !hasModifier && !isFunctionKey) {
+    return false;
+  }
+
+  // Alt+1..9 : aller directement a l'onglet N (fixe, non remappable).
+  const gotoMatch = /^Alt\+([1-9])$/.exec(chord);
+  if (gotoMatch) {
+    event.preventDefault();
+    gotoTab(parseInt(gotoMatch[1], 10));
+    return true;
+  }
+
+  const id = chordToActionId(chord);
+  if (!id) {
+    return false;
+  }
+  const action = SHORTCUT_ACTIONS.find((item) => item.id === id);
+  if (!action) {
+    return false;
+  }
+  event.preventDefault();
+  try {
+    action.run();
+  } catch {}
+  return true;
+}
+
+function setupShortcuts() {
+  document.addEventListener(
+    "keydown",
+    (event) => {
+      // Mode capture (reglage d'un raccourci) : on intercepte tout.
+      if (chordCaptureCallback) {
+        event.preventDefault();
+        event.stopPropagation();
+        if (["Control", "Shift", "Alt", "Meta"].includes(event.key)) {
+          return;
+        }
+        const chord = eventToChord(event);
+        const callback = chordCaptureCallback;
+        chordCaptureCallback = null;
+        callback(chord);
+        return;
+      }
+      handleShortcut(event);
+    },
+    true
+  );
+}
+
+// --- Affichage des raccourcis ----------------------------------------------
+const CHORD_DISPLAY = { " ": "Espace", Space: "Espace", Escape: "Échap", Enter: "Entrée", ArrowUp: "↑", ArrowDown: "↓", ArrowLeft: "←", ArrowRight: "→" };
+
+function renderChord(chord, target) {
+  if (!chord) {
+    const none = document.createElement("span");
+    none.className = "chord-none";
+    none.textContent = "—";
+    target.appendChild(none);
+    return;
+  }
+  const parts = chord.split("+");
+  parts.forEach((part, index) => {
+    const kbd = document.createElement("kbd");
+    kbd.textContent = CHORD_DISPLAY[part] || part;
+    target.appendChild(kbd);
+    if (index < parts.length - 1) {
+      const plus = document.createElement("span");
+      plus.className = "chord-plus";
+      plus.textContent = "+";
+      target.appendChild(plus);
+    }
+  });
+}
+
+function groupActionsByCategory() {
+  const groups = new Map();
+  for (const action of SHORTCUT_ACTIONS) {
+    if (!groups.has(action.category)) {
+      groups.set(action.category, []);
+    }
+    groups.get(action.category).push(action);
+  }
+  return groups;
+}
+
+// --- Modale de personnalisation des raccourcis -----------------------------
+function openShortcutsModal() {
+  const overlay = document.createElement("div");
+  overlay.className = "changelog-modal shortcuts-modal";
+
+  const dialog = document.createElement("div");
+  dialog.className = "changelog-dialog shortcuts-dialog";
+
+  const header = document.createElement("div");
+  header.className = "changelog-header";
+  header.innerHTML = '<i data-lucide="keyboard"></i><span>Raccourcis clavier</span>';
+  dialog.appendChild(header);
+
+  const sub = document.createElement("div");
+  sub.className = "changelog-sub";
+  sub.textContent = "Cliquez sur un raccourci puis tapez la combinaison. Retour arrière pour désactiver, Échap pour annuler.";
+  dialog.appendChild(sub);
+
+  const body = document.createElement("div");
+  body.className = "changelog-body shortcuts-body";
+  dialog.appendChild(body);
+
+  const notice = document.createElement("div");
+  notice.className = "shortcuts-notice";
+  dialog.appendChild(notice);
+
+  function flashNotice(message) {
+    notice.textContent = message || "";
+    notice.classList.toggle("visible", Boolean(message));
+  }
+
+  function renderRows() {
+    body.innerHTML = "";
+    for (const [category, actions] of groupActionsByCategory()) {
+      const section = document.createElement("div");
+      section.className = "shortcuts-section";
+
+      const title = document.createElement("div");
+      title.className = "shortcuts-section-title";
+      title.textContent = category;
+      section.appendChild(title);
+
+      for (const action of actions) {
+        const row = document.createElement("div");
+        row.className = "shortcuts-row";
+
+        const label = document.createElement("span");
+        label.className = "shortcuts-label";
+        label.textContent = action.label;
+
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = "shortcuts-chord-btn";
+        renderChord(keybindings[action.id], btn);
+
+        btn.addEventListener("click", () => {
+          if (chordCaptureCallback) {
+            return;
+          }
+          btn.classList.add("capturing");
+          btn.textContent = "Appuyez sur une touche…";
+          chordCaptureCallback = (chord) => {
+            btn.classList.remove("capturing");
+            if (!chord || chord === "Escape") {
+              renderRows();
+              return;
+            }
+            if (chord === "Backspace" || chord === "Delete") {
+              keybindings[action.id] = "";
+              saveKeybindings();
+              renderRows();
+              flashNotice(`« ${action.label} » désactivé.`);
+              return;
+            }
+            const owner = chordToActionId(chord);
+            if (owner && owner !== action.id) {
+              keybindings[owner] = "";
+              const ownerLabel = SHORTCUT_ACTIONS.find((a) => a.id === owner)?.label || owner;
+              flashNotice(`Raccourci réassigné (retiré de « ${ownerLabel} »).`);
+            } else {
+              flashNotice("");
+            }
+            keybindings[action.id] = chord;
+            saveKeybindings();
+            renderRows();
+          };
+        });
+
+        row.append(label, btn);
+        section.appendChild(row);
+      }
+      body.appendChild(section);
+    }
+
+    const fixed = document.createElement("div");
+    fixed.className = "shortcuts-section";
+    fixed.innerHTML = '<div class="shortcuts-section-title">Fixes</div>'
+      + '<div class="shortcuts-row"><span class="shortcuts-label">Aller à l\'onglet 1 à 9</span>'
+      + '<span class="shortcuts-chord-static"><kbd>Alt</kbd><span class="chord-plus">+</span><kbd>1…9</kbd></span></div>'
+      + '<div class="shortcuts-row"><span class="shortcuts-label">Copier / Coller dans le terminal</span>'
+      + '<span class="shortcuts-chord-static"><kbd>Ctrl</kbd><span class="chord-plus">+</span><kbd>Maj</kbd><span class="chord-plus">+</span><kbd>C</kbd> / <kbd>V</kbd></span></div>';
+    body.appendChild(fixed);
+  }
+
+  renderRows();
+
+  const actions = document.createElement("div");
+  actions.className = "changelog-actions shortcuts-actions";
+
+  const reset = document.createElement("button");
+  reset.type = "button";
+  reset.className = "ghost-button danger";
+  reset.textContent = "Tout réinitialiser";
+  reset.addEventListener("click", () => {
+    resetKeybindings();
+    renderRows();
+    flashNotice("Raccourcis réinitialisés.");
+  });
+
+  const close = document.createElement("button");
+  close.type = "button";
+  close.className = "primary-button";
+  close.textContent = "Fermer";
+  close.addEventListener("click", () => {
+    chordCaptureCallback = null;
+    overlay.remove();
+  });
+
+  actions.append(reset, close);
+  dialog.appendChild(actions);
+
+  overlay.appendChild(dialog);
+  overlay.addEventListener("click", (event) => {
+    if (event.target === overlay) {
+      chordCaptureCallback = null;
+      overlay.remove();
+    }
+  });
+
+  document.body.appendChild(overlay);
+  createIcons();
+}
+
+// --- Overlay d'aide (liste en lecture seule) -------------------------------
+function openHelpOverlay() {
+  const overlay = document.createElement("div");
+  overlay.className = "changelog-modal";
+
+  const dialog = document.createElement("div");
+  dialog.className = "changelog-dialog shortcuts-dialog";
+
+  const header = document.createElement("div");
+  header.className = "changelog-header";
+  header.innerHTML = '<i data-lucide="keyboard"></i><span>Raccourcis clavier</span>';
+  dialog.appendChild(header);
+
+  const body = document.createElement("div");
+  body.className = "changelog-body shortcuts-body";
+  for (const [category, actions] of groupActionsByCategory()) {
+    const section = document.createElement("div");
+    section.className = "shortcuts-section";
+    const title = document.createElement("div");
+    title.className = "shortcuts-section-title";
+    title.textContent = category;
+    section.appendChild(title);
+    for (const action of actions) {
+      if (!keybindings[action.id]) {
+        continue;
+      }
+      const row = document.createElement("div");
+      row.className = "shortcuts-row";
+      const label = document.createElement("span");
+      label.className = "shortcuts-label";
+      label.textContent = action.label;
+      const chord = document.createElement("span");
+      chord.className = "shortcuts-chord-static";
+      renderChord(keybindings[action.id], chord);
+      row.append(label, chord);
+      section.appendChild(row);
+    }
+    body.appendChild(section);
+  }
+  dialog.appendChild(body);
+
+  const actions = document.createElement("div");
+  actions.className = "changelog-actions";
+  const customize = document.createElement("button");
+  customize.type = "button";
+  customize.className = "ghost-button";
+  customize.textContent = "Personnaliser…";
+  customize.addEventListener("click", () => {
+    overlay.remove();
+    openShortcutsModal();
+  });
+  const ok = document.createElement("button");
+  ok.type = "button";
+  ok.className = "primary-button";
+  ok.textContent = "Compris";
+  ok.addEventListener("click", () => overlay.remove());
+  actions.append(customize, ok);
+  dialog.appendChild(actions);
+
+  overlay.appendChild(dialog);
+  overlay.addEventListener("click", (event) => {
+    if (event.target === overlay) {
+      overlay.remove();
+    }
+  });
+  document.body.appendChild(overlay);
+  createIcons();
+}
+
 function bindEvents() {
   elements.chooseFolderButton.addEventListener("click", async () => {
     updateFolder(await window.launcher.chooseFolder());
@@ -996,7 +1704,9 @@ function bindEvents() {
     setSidebarCollapsed(!elements.appShell.classList.contains("sidebar-collapsed"));
   });
   elements.historyButton.addEventListener("click", openHistory);
+  elements.shortcutsButton.addEventListener("click", openShortcutsModal);
   elements.historyResumeButton.addEventListener("click", resumeFromHistory);
+  setupShortcuts();
 
   elements.updateInstallButton.addEventListener("click", () => {
     elements.updateBannerText.textContent = "Redémarrage pour installer la mise à jour…";
@@ -1420,6 +2130,132 @@ function handleUpdateStatus(payload) {
   createIcons();
 }
 
+// Notes de version affichees apres une mise a jour. La cle est le numero de
+// version, la valeur la liste des nouveautes a montrer.
+const CHANGELOG = {
+  "0.1.9": [
+    "Raccourcis clavier : gestion des onglets (Ctrl+T, Ctrl+W, Ctrl+Tab, Alt+1…9), historique, menu, et plus.",
+    "Personnalisation : réassignez chaque raccourci depuis le bouton clavier de la barre d'outils (ou Ctrl+,).",
+    "Zoom de la police du terminal (Ctrl+= / Ctrl+- / Ctrl+0).",
+    "Recherche dans le terminal (Ctrl+Maj+F), duplication et relance d'un onglet.",
+    "Aide intégrée listant tous les raccourcis (F1)."
+  ],
+  "0.1.8": [
+    "Nouveau : cette fenêtre « Quoi de neuf ? » apparaît après chaque mise à jour pour résumer les nouveautés.",
+    "Vérification manuelle des mises à jour depuis le menu Fichier."
+  ],
+  "0.1.7": [
+    "Historique global : correction des doublons lors de la reprise ou de la restauration d'une session."
+  ],
+  "0.1.6": [
+    "Mises à jour automatiques de l'application via GitHub."
+  ],
+  "0.1.5": [
+    "Historique global de toutes les sessions, avec recherche et affichage coloré.",
+    "Sessions persistantes : reprise des conversations là où vous en étiez."
+  ]
+};
+
+// Compare deux versions "x.y.z" : renvoie 1 si a>b, -1 si a<b, 0 si egales.
+function compareVersions(a, b) {
+  const pa = String(a).split(".").map((n) => parseInt(n, 10) || 0);
+  const pb = String(b).split(".").map((n) => parseInt(n, 10) || 0);
+  for (let i = 0; i < Math.max(pa.length, pb.length); i += 1) {
+    const diff = (pa[i] || 0) - (pb[i] || 0);
+    if (diff !== 0) {
+      return diff > 0 ? 1 : -1;
+    }
+  }
+  return 0;
+}
+
+// Affiche les notes de version si on vient de mettre a jour (ou au 1er lancement).
+function maybeShowChangelog() {
+  const current = state.app?.appVersion;
+  if (!current) {
+    return;
+  }
+  const lastSeen = window.localStorage.getItem("lastSeenVersion");
+  window.localStorage.setItem("lastSeenVersion", current);
+
+  // Versions a presenter : toutes celles du changelog plus recentes que la
+  // derniere vue (ou seulement la version courante au tout premier lancement).
+  let toShow;
+  if (!lastSeen) {
+    toShow = CHANGELOG[current] ? [current] : [];
+  } else if (compareVersions(current, lastSeen) > 0) {
+    toShow = Object.keys(CHANGELOG)
+      .filter((v) => compareVersions(v, lastSeen) > 0 && compareVersions(v, current) <= 0)
+      .sort(compareVersions)
+      .reverse();
+  } else {
+    toShow = [];
+  }
+
+  if (toShow.length) {
+    showChangelog(toShow);
+  }
+}
+
+function showChangelog(versions) {
+  const overlay = document.createElement("div");
+  overlay.className = "changelog-modal";
+
+  const dialog = document.createElement("div");
+  dialog.className = "changelog-dialog";
+
+  const header = document.createElement("div");
+  header.className = "changelog-header";
+  header.innerHTML = '<i data-lucide="sparkles"></i><span>Quoi de neuf ?</span>';
+  dialog.appendChild(header);
+
+  const sub = document.createElement("div");
+  sub.className = "changelog-sub";
+  sub.textContent = `Mise à jour vers la version ${state.app.appVersion}`;
+  dialog.appendChild(sub);
+
+  const body = document.createElement("div");
+  body.className = "changelog-body";
+  for (const version of versions) {
+    const section = document.createElement("div");
+    section.className = "changelog-version";
+
+    const vt = document.createElement("div");
+    vt.className = "changelog-version-title";
+    vt.textContent = `Version ${version}`;
+    section.appendChild(vt);
+
+    const ul = document.createElement("ul");
+    for (const note of CHANGELOG[version] || []) {
+      const li = document.createElement("li");
+      li.textContent = note;
+      ul.appendChild(li);
+    }
+    section.appendChild(ul);
+    body.appendChild(section);
+  }
+  dialog.appendChild(body);
+
+  const actions = document.createElement("div");
+  actions.className = "changelog-actions";
+  const ok = document.createElement("button");
+  ok.type = "button";
+  ok.className = "primary-button";
+  ok.textContent = "Compris";
+  ok.addEventListener("click", () => overlay.remove());
+  actions.appendChild(ok);
+  dialog.appendChild(actions);
+
+  overlay.appendChild(dialog);
+  overlay.addEventListener("click", (event) => {
+    if (event.target === overlay) {
+      overlay.remove();
+    }
+  });
+  document.body.appendChild(overlay);
+  createIcons();
+}
+
 async function init() {
   createIcons();
   state.app = await window.launcher.getAppState();
@@ -1463,6 +2299,8 @@ async function init() {
   } else {
     renderRestoreSection(savedSessions);
   }
+
+  maybeShowChangelog();
 }
 
 function showRestoreToast(count) {

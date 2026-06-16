@@ -782,6 +782,96 @@ select:focus {
   cursor: default;
 }
 
+/* --- Notes de version (Quoi de neuf) --- */
+
+.changelog-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 120;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 32px;
+  background: rgba(0, 0, 0, 0.55);
+}
+
+.changelog-dialog {
+  display: flex;
+  flex-direction: column;
+  width: min(540px, 100%);
+  max-height: min(640px, 100%);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--panel);
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.5);
+  overflow: hidden;
+}
+
+.changelog-header {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 16px 18px 4px;
+  color: var(--text);
+  font-size: 17px;
+  font-weight: 800;
+}
+
+.changelog-header svg {
+  width: 20px;
+  height: 20px;
+  color: var(--accent);
+}
+
+.changelog-sub {
+  padding: 0 18px 12px;
+  color: var(--muted);
+  font-size: 12px;
+  border-bottom: 1px solid var(--line);
+}
+
+.changelog-body {
+  padding: 14px 18px;
+  overflow-y: auto;
+}
+
+.changelog-version + .changelog-version {
+  margin-top: 14px;
+}
+
+.changelog-version-title {
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: 6px;
+}
+
+.changelog-body ul {
+  margin: 0;
+  padding-left: 18px;
+}
+
+.changelog-body li {
+  margin: 4px 0;
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.changelog-actions {
+  display: flex;
+  justify-content: flex-end;
+  padding: 12px 18px;
+  border-top: 1px solid var(--line);
+}
+
+.changelog-actions .primary-button {
+  min-height: 36px;
+  padding: 0 20px;
+}
+
 .tab-title.editing {
   outline: 1px solid var(--accent);
   border-radius: 3px;
@@ -1047,4 +1137,168 @@ select:focus {
 
 .history-viewer-actions .primary-button {
   min-height: 36px;
+}
+
+/* --- Recherche dans le terminal ------------------------------------------ */
+.term-search {
+  position: fixed;
+  top: 96px;
+  right: 28px;
+  z-index: 130;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--panel-strong);
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.45);
+}
+
+.term-search.hidden {
+  display: none;
+}
+
+.term-search-input {
+  width: 200px;
+  height: 30px;
+  padding: 0 9px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 13px;
+  outline: none;
+}
+
+.term-search-input:focus {
+  border-color: var(--accent);
+}
+
+.term-search-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--panel);
+  color: var(--muted);
+  font-size: 15px;
+  cursor: pointer;
+}
+
+.term-search-btn:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+/* --- Modale / overlay des raccourcis ------------------------------------- */
+.shortcuts-dialog {
+  width: min(600px, 100%);
+  max-height: min(80vh, 720px);
+}
+
+.shortcuts-body {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.shortcuts-section-title {
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  margin-bottom: 6px;
+}
+
+.shortcuts-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 5px 0;
+}
+
+.shortcuts-row + .shortcuts-row {
+  border-top: 1px solid rgba(255, 255, 255, 0.04);
+}
+
+.shortcuts-label {
+  color: var(--text);
+  font-size: 13px;
+}
+
+.shortcuts-chord-btn,
+.shortcuts-chord-static {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  min-height: 30px;
+  padding: 3px 8px;
+  border-radius: 6px;
+  white-space: nowrap;
+}
+
+.shortcuts-chord-btn {
+  border: 1px dashed var(--line);
+  background: var(--bg);
+  color: var(--text);
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.shortcuts-chord-btn:hover {
+  border-color: var(--accent);
+}
+
+.shortcuts-chord-btn.capturing {
+  border-style: solid;
+  border-color: var(--accent);
+  color: var(--accent);
+  font-size: 12px;
+}
+
+.shortcuts-body kbd {
+  display: inline-block;
+  min-width: 18px;
+  padding: 2px 6px;
+  border: 1px solid var(--line);
+  border-bottom-width: 2px;
+  border-radius: 5px;
+  background: var(--panel-strong);
+  color: var(--text);
+  font-family: "Cascadia Mono", Consolas, monospace;
+  font-size: 11px;
+  text-align: center;
+}
+
+.chord-plus {
+  color: var(--soft);
+  font-size: 11px;
+}
+
+.chord-none {
+  color: var(--soft);
+}
+
+.shortcuts-notice {
+  min-height: 0;
+  padding: 0 18px;
+  color: var(--warning);
+  font-size: 12px;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+
+.shortcuts-notice.visible {
+  min-height: 18px;
+  opacity: 1;
+}
+
+.shortcuts-actions {
+  justify-content: space-between;
 }

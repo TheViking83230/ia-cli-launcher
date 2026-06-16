@@ -248,13 +248,12 @@ function setAppMenu() {
     {
       label: "Affichage",
       submenu: [
+        // Note : le zoom de la police du terminal (Ctrl+= / Ctrl+- / Ctrl+0) et
+        // "Forcer l'actualisation" sont gérés par les raccourcis de l'app. Les
+        // rôles Electron correspondants sont retirés ici pour ne pas capter ces
+        // touches avant le renderer.
         { role: "reload", label: "Actualiser" },
-        { role: "forceReload", label: "Forcer l'actualisation" },
         { role: "toggleDevTools", label: "Outils de développement" },
-        { type: "separator" },
-        { role: "resetZoom", label: "Réinitialiser le zoom" },
-        { role: "zoomIn", label: "Zoom avant" },
-        { role: "zoomOut", label: "Zoom arrière" },
         { type: "separator" },
         { role: "togglefullscreen", label: "Plein écran" }
       ]
@@ -263,7 +262,9 @@ function setAppMenu() {
       label: "Fenêtre",
       submenu: [
         { role: "minimize", label: "Réduire" },
-        { role: "close", label: "Fermer" }
+        // Item personnalisé (sans rôle) pour libérer Ctrl+W au profit du
+        // raccourci "Fermer l'onglet" du renderer.
+        { label: "Fermer la fenêtre", click: (_item, win) => win && win.close() }
       ]
     }
   ];
@@ -586,7 +587,12 @@ function startShellSession(request) {
     throw new Error("Commande manquante.");
   }
 
-  const id = crypto.randomUUID();
+  // Reprise d'une session existante (restauration au demarrage ou bouton
+  // "Reprendre" de l'historique) : on reutilise l'identifiant d'origine pour
+  // ne pas creer de doublon dans l'historique. Repli sur un nouvel id si cet
+  // identifiant correspond deja a une session vivante.
+  const resumeId = String(request.resumeId || "").trim();
+  const id = resumeId && !sessions.has(resumeId) ? resumeId : crypto.randomUUID();
   const { command: shellCommand, args: shellArgs } = platform.getShell(commandLine);
 
   const ptyProcess = pty.spawn(shellCommand, shellArgs, {
@@ -777,6 +783,7 @@ app.whenReady().then(() => {
       commandLine: fullCommand,
       cwd: request.cwd,
       extraArgs: request.extraArgs,
+      resumeId: request.resumeId,
       profileId: request.profileId,
       profileLabel: request.profileLabel,
       modeId: request.modeId,
@@ -791,6 +798,7 @@ app.whenReady().then(() => {
       title: request.title,
       commandLine: request.commandLine,
       cwd: request.cwd || app.getPath("home"),
+      resumeId: request.resumeId,
       profileId: request.profileId,
       profileLabel: request.profileLabel,
       modeId: request.modeId,
