@@ -1302,3 +1302,65 @@ select:focus {
 .shortcuts-actions {
   justify-content: space-between;
 }
+
+/* --- Personas ------------------------------------------------------------- */
+.persona-row {
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.persona-info {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  min-width: 0;
+}
+
+.persona-dot {
+  flex: none;
+  width: 12px;
+  height: 12px;
+  margin-top: 3px;
+  border-radius: 50%;
+}
+
+.persona-name {
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.persona-preview {
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.4;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.persona-row-actions {
+  flex: none;
+  display: flex;
+  gap: 6px;
+}
+
+.persona-textarea {
+  width: 100%;
+  resize: vertical;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text);
+  font-family: "Cascadia Mono", Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.45;
+  outline: none;
+}
+
+.persona-textarea:focus {
+  border-color: var(--accent);
+}

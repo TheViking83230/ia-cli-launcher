@@ -4,7 +4,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const pty = require("@lydell/node-pty");
 const { autoUpdater } = require("electron-updater");
-const { defaultProfiles } = require("./defaultProfiles");
+const { defaultProfiles, defaultPersonas } = require("./defaultProfiles");
 const platform = require("./platform");
 
 // Sous Linux, certaines distributions recentes (Ubuntu 24.04+) bloquent les
@@ -333,6 +333,87 @@ function cloneDefaultProfiles() {
   return JSON.parse(JSON.stringify(defaultProfiles));
 }
 
+function cloneDefaultPersonas() {
+  return JSON.parse(JSON.stringify(defaultPersonas));
+}
+
+// Personas : si la cle est absente on amorce avec la liste par defaut ; si elle
+// existe (meme vide, l'utilisateur a tout supprime) on la respecte.
+function normalizePersonas(personas) {
+  if (!Array.isArray(personas)) {
+    return cloneDefaultPersonas();
+  }
+  return personas
+    .filter((persona) => persona && persona.id)
+    .map((persona) => ({
+      id: String(persona.id),
+      name: String(persona.name || "Persona"),
+      accent: String(persona.accent || "#64748b"),
+      prompt: String(persona.prompt || "")
+    }));
+}
+
+// --- Injection de persona (system prompt) au lancement d'une CLI -----------
+const PERSONA_BLOCK_START = "<!-- IA-CLI-LAUNCHER:PERSONA:start (gere automatiquement, ne pas editer) -->";
+const PERSONA_BLOCK_END = "<!-- IA-CLI-LAUNCHER:PERSONA:end -->";
+const PERSONA_BLOCK_RE = /\n*<!-- IA-CLI-LAUNCHER:PERSONA:start[\s\S]*?<!-- IA-CLI-LAUNCHER:PERSONA:end -->\n*/g;
+
+// Ecrit la persona dans un fichier temporaire (pour les CLI qui acceptent un
+// fichier en argument, ex. Claude --append-system-prompt-file, Aider --read).
+function writePersonaTempFile(prompt) {
+  const dir = path.join(app.getPath("temp"), "ia-cli-launcher-personas");
+  fs.mkdirSync(dir, { recursive: true });
+  const file = path.join(dir, `persona-${crypto.randomUUID()}.md`);
+  fs.writeFileSync(file, prompt, "utf8");
+  return file;
+}
+
+// Insere/retire un bloc balise dans le fichier de contexte du projet, en
+// preservant le contenu existant hors du bloc.
+function applyPersonaToProjectFile(cwd, fileName, prompt) {
+  if (!cwd || !fileName) {
+    return;
+  }
+  const filePath = path.join(cwd, fileName);
+  let content = "";
+  try {
+    content = fs.existsSync(filePath) ? fs.readFileSync(filePath, "utf8") : "";
+  } catch {
+    content = "";
+  }
+
+  content = content.replace(PERSONA_BLOCK_RE, "\n").trimEnd();
+  if (prompt) {
+    const block = `${PERSONA_BLOCK_START}\n${prompt}\n${PERSONA_BLOCK_END}`;
+    content = content ? `${content}\n\n${block}\n` : `${block}\n`;
+  } else if (content) {
+    content = `${content}\n`;
+  }
+
+  try {
+    fs.writeFileSync(filePath, content, "utf8");
+  } catch {}
+}
+
+// Renvoie les args eventuellement enrichis selon la methode d'injection.
+function applyPersonaInjection({ injection, prompt, cwd, launchArgs }) {
+  const text = String(prompt || "").trim();
+  if (!text || !injection || !injection.kind) {
+    return launchArgs;
+  }
+  if (injection.kind === "arg-file" && injection.flag) {
+    return [...launchArgs, injection.flag, writePersonaTempFile(text)];
+  }
+  if (injection.kind === "arg" && injection.flag) {
+    return [...launchArgs, injection.flag, text];
+  }
+  if (injection.kind === "project-file" && injection.file) {
+    applyPersonaToProjectFile(cwd, injection.file, text);
+    return launchArgs;
+  }
+  return launchArgs;
+}
+
 function normalizeConfig(config) {
   const incomingProfiles = Array.isArray(config?.profiles) ? config.profiles : [];
   const incomingById = new Map(incomingProfiles.map((profile) => [profile.id, profile]));
@@ -361,7 +442,8 @@ function normalizeConfig(config) {
   const customProfiles = incomingProfiles.filter((profile) => profile.id && !defaultById.has(profile.id));
   return {
     version: 1,
-    profiles: [...mergedDefaults, ...customProfiles]
+    profiles: [...mergedDefaults, ...customProfiles],
+    personas: normalizePersonas(config?.personas)
   };
 }
 
@@ -772,6 +854,15 @@ app.whenReady().then(() => {
     } else {
       launchArgs = [...modeArgs, ...extraArgs, ...resumeArgs];
     }
+
+    // Persona (system prompt) : injection par argument ou par fichier de
+    // contexte selon la methode declaree par le profil.
+    launchArgs = applyPersonaInjection({
+      injection: request.personaInjection,
+      prompt: request.personaPrompt,
+      cwd: request.cwd,
+      launchArgs
+    });
 
     const fullCommand = joinCommandChain([
       ...preLaunchCommands,

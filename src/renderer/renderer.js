@@ -16,6 +16,8 @@ const elements = {
   tabTitleInput: document.getElementById("tabTitleInput"),
   profileSelect: document.getElementById("profileSelect"),
   modeSelect: document.getElementById("modeSelect"),
+  personaSelect: document.getElementById("personaSelect"),
+  managePersonasButton: document.getElementById("managePersonasButton"),
   extraArgsInput: document.getElementById("extraArgsInput"),
   commandInput: document.getElementById("commandInput"),
   modeArgsInput: document.getElementById("modeArgsInput"),
@@ -104,6 +106,40 @@ function getSelectedProfile() {
 function getSelectedMode() {
   const profile = getSelectedProfile();
   return profile?.modes.find((mode) => mode.id === elements.modeSelect.value);
+}
+
+function getPersonas() {
+  return Array.isArray(state.config?.personas) ? state.config.personas : [];
+}
+
+function getPersonaById(id) {
+  return getPersonas().find((persona) => persona.id === id) || null;
+}
+
+// Remplit le selecteur de persona ("Aucune" + la bibliotheque), en conservant
+// la selection courante si possible.
+function renderPersonas(selectedId = elements.personaSelect.value) {
+  const personas = getPersonas();
+  const target = selectedId || window.localStorage.getItem("lastPersonaId") || "";
+  elements.personaSelect.innerHTML = "";
+
+  const none = document.createElement("option");
+  none.value = "";
+  none.textContent = "Aucune";
+  elements.personaSelect.appendChild(none);
+
+  for (const persona of personas) {
+    const option = document.createElement("option");
+    option.value = persona.id;
+    option.textContent = persona.name;
+    elements.personaSelect.appendChild(option);
+  }
+
+  elements.personaSelect.value = getPersonaById(target) ? target : "";
+}
+
+function getSelectedPersona() {
+  return getPersonaById(elements.personaSelect.value);
 }
 
 function stringifyArgs(args) {
@@ -864,7 +900,7 @@ function renderRestoreSection(savedSessions) {
 // Lance une session a partir d'un profil/mode/dossier. Centralise pour etre
 // reutilise par le bouton "Lancer" comme par les raccourcis (dupliquer,
 // relancer, rouvrir la derniere session fermee).
-async function launchFromProfile({ profileId, modeId, extraArgs, cwd, title, accent }) {
+async function launchFromProfile({ profileId, modeId, extraArgs, cwd, title, accent, personaId }) {
   const profile = state.config.profiles.find((p) => p.id === profileId);
   const mode = profile?.modes.find((m) => m.id === modeId);
   if (!profile || !mode) {
@@ -872,6 +908,7 @@ async function launchFromProfile({ profileId, modeId, extraArgs, cwd, title, acc
     return;
   }
 
+  const persona = personaId ? getPersonaById(personaId) : null;
   const finalTitle = title || profile.label;
   const spec = {
     kind: "profile",
@@ -880,7 +917,8 @@ async function launchFromProfile({ profileId, modeId, extraArgs, cwd, title, acc
     profileId,
     modeId,
     extraArgs: extraArgs || "",
-    cwd
+    cwd,
+    personaId: persona ? personaId : ""
   };
 
   await openTerminalSession({
@@ -899,6 +937,8 @@ async function launchFromProfile({ profileId, modeId, extraArgs, cwd, title, acc
         profileLabel: profile.label,
         modeId: mode.id,
         modeLabel: mode.label,
+        personaPrompt: persona?.prompt || "",
+        personaInjection: persona ? profile.personaInjection || null : null,
         cols,
         rows
       })
@@ -919,6 +959,9 @@ async function launchSession() {
     return;
   }
 
+  const persona = getSelectedPersona();
+  window.localStorage.setItem("lastPersonaId", persona?.id || "");
+
   const title = elements.tabTitleInput.value.trim() || profile.label;
   await launchFromProfile({
     profileId: profile.id,
@@ -926,7 +969,8 @@ async function launchSession() {
     extraArgs: elements.extraArgsInput.value,
     cwd: state.selectedFolder,
     title,
-    accent: profile.accent
+    accent: profile.accent,
+    personaId: persona?.id || ""
   });
 }
 
@@ -1648,6 +1692,197 @@ function openHelpOverlay() {
   createIcons();
 }
 
+// --- Gestionnaire de personas (Gems) ---------------------------------------
+async function persistPersonas() {
+  state.config = await window.launcher.saveConfig(state.config);
+  renderPersonas();
+}
+
+function openPersonasModal() {
+  const overlay = document.createElement("div");
+  overlay.className = "changelog-modal shortcuts-modal";
+
+  const dialog = document.createElement("div");
+  dialog.className = "changelog-dialog shortcuts-dialog";
+
+  const header = document.createElement("div");
+  header.className = "changelog-header";
+  header.innerHTML = '<i data-lucide="sparkles"></i><span>Personas</span>';
+  dialog.appendChild(header);
+
+  const sub = document.createElement("div");
+  sub.className = "changelog-sub";
+  sub.textContent = "Une persona ajoute des instructions (system prompt) à la CLI au lancement. Sélectionne-la ensuite dans « Nouvel onglet ».";
+  dialog.appendChild(sub);
+
+  const body = document.createElement("div");
+  body.className = "changelog-body shortcuts-body";
+  dialog.appendChild(body);
+
+  const actions = document.createElement("div");
+  actions.className = "changelog-actions shortcuts-actions";
+  dialog.appendChild(actions);
+
+  function close() {
+    overlay.remove();
+  }
+
+  function renderList() {
+    body.innerHTML = "";
+    actions.innerHTML = "";
+
+    const personas = getPersonas();
+    if (!personas.length) {
+      const empty = document.createElement("div");
+      empty.className = "shortcuts-label";
+      empty.textContent = "Aucune persona. Crée la première avec « Ajouter ».";
+      body.appendChild(empty);
+    }
+
+    for (const persona of personas) {
+      const row = document.createElement("div");
+      row.className = "shortcuts-row persona-row";
+
+      const info = document.createElement("div");
+      info.className = "persona-info";
+      const dot = document.createElement("span");
+      dot.className = "persona-dot";
+      dot.style.background = persona.accent || "#64748b";
+      const texts = document.createElement("div");
+      const name = document.createElement("div");
+      name.className = "persona-name";
+      name.textContent = persona.name;
+      const preview = document.createElement("div");
+      preview.className = "persona-preview";
+      preview.textContent = persona.prompt;
+      texts.append(name, preview);
+      info.append(dot, texts);
+
+      const btns = document.createElement("div");
+      btns.className = "persona-row-actions";
+      const edit = document.createElement("button");
+      edit.type = "button";
+      edit.className = "ghost-button";
+      edit.textContent = "Éditer";
+      edit.addEventListener("click", () => renderEditor(persona));
+      const del = document.createElement("button");
+      del.type = "button";
+      del.className = "ghost-button danger";
+      del.textContent = "Suppr.";
+      del.addEventListener("click", async () => {
+        if (!window.confirm(`Supprimer la persona « ${persona.name} » ?`)) {
+          return;
+        }
+        state.config.personas = getPersonas().filter((item) => item.id !== persona.id);
+        await persistPersonas();
+        renderList();
+      });
+      btns.append(edit, del);
+
+      row.append(info, btns);
+      body.appendChild(row);
+    }
+
+    const add = document.createElement("button");
+    add.type = "button";
+    add.className = "ghost-button";
+    add.textContent = "Ajouter";
+    add.addEventListener("click", () => renderEditor(null));
+    const done = document.createElement("button");
+    done.type = "button";
+    done.className = "primary-button";
+    done.textContent = "Fermer";
+    done.addEventListener("click", close);
+    actions.append(add, done);
+  }
+
+  function renderEditor(persona) {
+    body.innerHTML = "";
+    actions.innerHTML = "";
+    const editing = Boolean(persona);
+
+    const nameField = document.createElement("label");
+    nameField.className = "field";
+    nameField.innerHTML = "<span>Nom</span>";
+    const nameInput = document.createElement("input");
+    nameInput.type = "text";
+    nameInput.value = persona?.name || "";
+    nameInput.placeholder = "ex. Relecteur strict";
+    nameField.appendChild(nameInput);
+
+    const colorField = document.createElement("label");
+    colorField.className = "field";
+    colorField.innerHTML = "<span>Couleur</span>";
+    const colorInput = document.createElement("input");
+    colorInput.type = "color";
+    colorInput.value = persona?.accent || "#64748b";
+    colorField.appendChild(colorInput);
+
+    const promptField = document.createElement("label");
+    promptField.className = "field";
+    promptField.innerHTML = "<span>Instructions (system prompt)</span>";
+    const promptInput = document.createElement("textarea");
+    promptInput.className = "persona-textarea";
+    promptInput.rows = 8;
+    promptInput.value = persona?.prompt || "";
+    promptInput.placeholder = "Décris la personnalité / les règles à appliquer à l'IA…";
+    promptField.appendChild(promptInput);
+
+    body.append(nameField, colorField, promptField);
+
+    const cancel = document.createElement("button");
+    cancel.type = "button";
+    cancel.className = "ghost-button";
+    cancel.textContent = "Annuler";
+    cancel.addEventListener("click", renderList);
+
+    const save = document.createElement("button");
+    save.type = "button";
+    save.className = "primary-button";
+    save.textContent = "Enregistrer";
+    save.addEventListener("click", async () => {
+      const name = nameInput.value.trim();
+      const prompt = promptInput.value.trim();
+      if (!name || !prompt) {
+        flashStatus("Nom et instructions requis pour la persona.");
+        return;
+      }
+      if (!Array.isArray(state.config.personas)) {
+        state.config.personas = [];
+      }
+      if (editing) {
+        const target = state.config.personas.find((item) => item.id === persona.id);
+        if (target) {
+          target.name = name;
+          target.prompt = prompt;
+          target.accent = colorInput.value;
+        }
+      } else {
+        state.config.personas.push({
+          id: `persona-${Date.now()}`,
+          name,
+          accent: colorInput.value,
+          prompt
+        });
+      }
+      await persistPersonas();
+      renderList();
+    });
+
+    actions.append(cancel, save);
+  }
+
+  renderList();
+  overlay.appendChild(dialog);
+  overlay.addEventListener("click", (event) => {
+    if (event.target === overlay) {
+      close();
+    }
+  });
+  document.body.appendChild(overlay);
+  createIcons();
+}
+
 function bindEvents() {
   elements.chooseFolderButton.addEventListener("click", async () => {
     updateFolder(await window.launcher.chooseFolder());
@@ -1659,6 +1894,10 @@ function bindEvents() {
   });
 
   elements.modeSelect.addEventListener("change", renderProfileSettings);
+  elements.personaSelect.addEventListener("change", () => {
+    window.localStorage.setItem("lastPersonaId", elements.personaSelect.value || "");
+  });
+  elements.managePersonasButton.addEventListener("click", openPersonasModal);
   elements.saveProfileButton.addEventListener("click", saveProfileEdits);
   elements.launchButton.addEventListener("click", launchSession);
   elements.installProfileButton.addEventListener("click", installSelectedProfile);
@@ -1676,6 +1915,7 @@ function bindEvents() {
   elements.resetProfilesButton.addEventListener("click", async () => {
     state.config = await window.launcher.resetConfig();
     renderProfiles();
+    renderPersonas();
     refreshAuthStatus();
   });
 
@@ -2133,6 +2373,11 @@ function handleUpdateStatus(payload) {
 // Notes de version affichees apres une mise a jour. La cle est le numero de
 // version, la valeur la liste des nouveautes a montrer.
 const CHANGELOG = {
+  "0.1.10": [
+    "Personas : applique des instructions (system prompt) à l'IA au lancement — façon « Gem » / « GPT ».",
+    "Bibliothèque de personas personnalisable (bouton « Gérer les personas ») et sélecteur dans « Nouvel onglet ».",
+    "Injection adaptée à chaque CLI : argument pour Claude/Aider, fichier de contexte (AGENTS.md/GEMINI.md/QWEN.md) pour les autres."
+  ],
   "0.1.9": [
     "Raccourcis clavier : gestion des onglets (Ctrl+T, Ctrl+W, Ctrl+Tab, Alt+1…9), historique, menu, et plus.",
     "Personnalisation : réassignez chaque raccourci depuis le bouton clavier de la barre d'outils (ou Ctrl+,).",
@@ -2278,6 +2523,7 @@ async function init() {
   setSidebarCollapsed(window.localStorage.getItem("sidebarCollapsed") === "1");
   updateFolder(window.localStorage.getItem("lastFolder") || "");
   renderProfiles();
+  renderPersonas();
   refreshAuthStatus();
   createIcons();
 

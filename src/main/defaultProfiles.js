@@ -367,4 +367,55 @@ const defaultProfiles = [
   }
 ];
 
-module.exports = { defaultProfiles };
+// Methode d'injection de "persona" (system prompt) par CLI :
+// - arg-file   : la persona est ecrite dans un fichier temporaire passe en
+//                argument (rien n'est ecrit dans le projet de l'utilisateur).
+// - project-file : la persona est inseree dans un bloc balise du fichier de
+//                contexte que la CLI lit automatiquement (le reste du fichier
+//                est preserve).
+const personaInjectionById = {
+  claude: { kind: "arg-file", flag: "--append-system-prompt-file" },
+  aider: { kind: "arg-file", flag: "--read" },
+  codex: { kind: "project-file", file: "AGENTS.md" },
+  opencode: { kind: "project-file", file: "AGENTS.md" },
+  cursor: { kind: "project-file", file: "AGENTS.md" },
+  amp: { kind: "project-file", file: "AGENTS.md" },
+  gemini: { kind: "project-file", file: "GEMINI.md" },
+  qwen: { kind: "project-file", file: "QWEN.md" }
+};
+
+for (const profile of defaultProfiles) {
+  if (personaInjectionById[profile.id]) {
+    profile.personaInjection = personaInjectionById[profile.id];
+  }
+}
+
+// Personas par defaut (agnostiques de la CLI : juste un texte de system prompt).
+const defaultPersonas = [
+  {
+    id: "concise",
+    name: "Concis",
+    accent: "#38bdf8",
+    prompt: "Réponds de façon concise et directe. Va droit au but, sans préambule ni récapitulatif superflu."
+  },
+  {
+    id: "francais",
+    name: "Toujours en français",
+    accent: "#22c55e",
+    prompt: "Réponds toujours en français, y compris pour les commentaires de code et les messages de commit."
+  },
+  {
+    id: "reviewer",
+    name: "Relecteur strict",
+    accent: "#f59e0b",
+    prompt: "Agis comme un relecteur senior exigeant : signale les bugs, cas limites, problèmes de sécurité et de lisibilité. Propose des améliorations concrètes plutôt que de simplement valider."
+  },
+  {
+    id: "pedago",
+    name: "Pédagogue",
+    accent: "#a78bfa",
+    prompt: "Explique ton raisonnement étape par étape et justifie tes choix techniques, comme pour un développeur junior qui souhaite comprendre."
+  }
+];
+
+module.exports = { defaultProfiles, defaultPersonas };
