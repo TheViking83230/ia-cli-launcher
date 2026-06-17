@@ -1364,3 +1364,44 @@ select:focus {
 .persona-textarea:focus {
   border-color: var(--accent);
 }
+
+/* --- Synchronisation ----------------------------------------------------- */
+.sync-status {
+  margin-bottom: 4px;
+}
+
+.sync-badge {
+  display: inline-block;
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.sync-badge.on {
+  background: rgba(69, 212, 131, 0.16);
+  color: var(--accent);
+}
+
+.sync-badge.off {
+  background: rgba(162, 170, 184, 0.16);
+  color: var(--muted);
+}
+
+.sync-path {
+  padding: 8px 10px;
+  margin: 4px 0 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text);
+  font-family: "Cascadia Mono", Consolas, monospace;
+  font-size: 12px;
+  word-break: break-all;
+}
+
+.sync-note {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}

@@ -23,18 +23,118 @@ const TRANSCRIPT_LIMIT = 512 * 1024;
 // Nombre maximum de sessions conservees dans l'historique global.
 const MAX_HISTORY = 500;
 
+// --- Dossier de donnees : local par defaut, ou dossier synchronise choisi ---
+// Le pointeur (sync.json) est garde dans le userData REEL et n'est jamais
+// synchronise : chaque PC a son propre chemin de montage du dossier cloud.
+let cachedDataDir;
+
+function getSyncSettingsPath() {
+  return path.join(app.getPath("userData"), "sync.json");
+}
+
+function readSyncDir() {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(getSyncSettingsPath(), "utf8"));
+    const dir = String(parsed?.dataDir || "").trim();
+    return dir || null;
+  } catch {
+    return null;
+  }
+}
+
+// Dossier ou sont reellement lus/ecrits profils, historique et sessions.
+function getDataDir() {
+  if (cachedDataDir === undefined) {
+    cachedDataDir = readSyncDir();
+  }
+  if (cachedDataDir) {
+    try {
+      fs.mkdirSync(cachedDataDir, { recursive: true });
+      return cachedDataDir;
+    } catch {
+      // Dossier synchronise indisponible (cloud non monte) : repli local pour
+      // ne pas perdre de donnees ni planter.
+      return app.getPath("userData");
+    }
+  }
+  return app.getPath("userData");
+}
+
+// Copie un fichier seulement s'il manque dans la cible (amorcage non destructif).
+function copyFileIfMissing(src, dest) {
+  try {
+    if (fs.existsSync(src) && !fs.existsSync(dest)) {
+      fs.mkdirSync(path.dirname(dest), { recursive: true });
+      fs.copyFileSync(src, dest);
+    }
+  } catch {}
+}
+
+function copyFileOverwrite(src, dest) {
+  try {
+    if (fs.existsSync(src)) {
+      fs.mkdirSync(path.dirname(dest), { recursive: true });
+      fs.copyFileSync(src, dest);
+    }
+  } catch {}
+}
+
+const DATA_FILES = ["profiles.json", "history.json", "sessions.json"];
+
+function mergeHistoryFiles(srcDir, destDir) {
+  try {
+    if (!fs.existsSync(srcDir)) {
+      return;
+    }
+    fs.mkdirSync(destDir, { recursive: true });
+    for (const name of fs.readdirSync(srcDir)) {
+      copyFileIfMissing(path.join(srcDir, name), path.join(destDir, name));
+    }
+  } catch {}
+}
+
+// Amorce un dossier cible avec les donnees actuelles SANS ecraser ce qui existe
+// (utilise quand on active la synchro : si le dossier cloud est deja peuple par
+// un autre PC, on respecte son contenu).
+function seedDataDir(fromDir, toDir) {
+  if (!fromDir || !toDir || fromDir === toDir) {
+    return;
+  }
+  for (const name of DATA_FILES) {
+    copyFileIfMissing(path.join(fromDir, name), path.join(toDir, name));
+  }
+  mergeHistoryFiles(path.join(fromDir, "history"), path.join(toDir, "history"));
+}
+
+// Rapatrie les donnees synchronisees en local en ECRASANT (utilise quand on
+// desactive la synchro : le contenu synchronise est la verite a conserver).
+function pullDataDir(fromDir, toDir) {
+  if (!fromDir || !toDir || fromDir === toDir) {
+    return;
+  }
+  for (const name of DATA_FILES) {
+    copyFileOverwrite(path.join(fromDir, name), path.join(toDir, name));
+  }
+  mergeHistoryFiles(path.join(fromDir, "history"), path.join(toDir, "history"));
+}
+
+function relaunchApp() {
+  app.relaunch();
+  app.exit(0);
+}
+
 function getSessionsPath() {
-  return path.join(app.getPath("userData"), "sessions.json");
+  return path.join(getDataDir(), "sessions.json");
 }
 
 // Index de l'historique global (toutes sessions, terminees ou non).
 function getHistoryIndexPath() {
-  return path.join(app.getPath("userData"), "history.json");
+  return path.join(getDataDir(), "history.json");
 }
 
 // Dossier des transcriptions (sortie terminal capturee), un fichier par session.
 function getHistoryDir() {
-  return path.join(app.getPath("userData"), "history");
+  return path.join(getDataDir(), "history");
 }
 
 function getTranscriptPath(id) {
@@ -326,7 +426,7 @@ function createWindow() {
 }
 
 function getConfigPath() {
-  return path.join(app.getPath("userData"), "profiles.json");
+  return path.join(getDataDir(), "profiles.json");
 }
 
 function cloneDefaultProfiles() {
@@ -818,6 +918,51 @@ app.whenReady().then(() => {
   ipcMain.handle("config:save", (_event, config) => writeConfig(config));
   ipcMain.handle("config:reset", () => writeConfig({ version: 1, profiles: defaultProfiles }));
   ipcMain.handle("auth:get-status", () => getAuthStatuses());
+
+  // Synchronisation des donnees du launcher (dossier cloud choisi).
+  ipcMain.handle("sync:get", () => {
+    const custom = readSyncDir();
+    return {
+      dataDir: custom || app.getPath("userData"),
+      localDir: app.getPath("userData"),
+      isCustom: Boolean(custom)
+    };
+  });
+
+  ipcMain.handle("sync:set", (_event, folder) => {
+    const target = String(folder || "").trim();
+    if (!target) {
+      return { ok: false, error: "Dossier invalide." };
+    }
+    try {
+      fs.mkdirSync(target, { recursive: true });
+    } catch (error) {
+      return { ok: false, error: String(error?.message || error) };
+    }
+    // Amorce le dossier cible avec les donnees actuelles, sans ecraser ce qui
+    // s'y trouverait deja (autre PC ayant deja peuple le dossier).
+    seedDataDir(getDataDir(), target);
+    try {
+      fs.writeFileSync(getSyncSettingsPath(), JSON.stringify({ dataDir: target }, null, 2), "utf8");
+    } catch (error) {
+      return { ok: false, error: String(error?.message || error) };
+    }
+    setTimeout(relaunchApp, 250);
+    return { ok: true };
+  });
+
+  ipcMain.handle("sync:disable", () => {
+    const current = readSyncDir();
+    if (current) {
+      // Rapatrie les donnees synchronisees en local avant de repasser en local.
+      pullDataDir(current, app.getPath("userData"));
+    }
+    try {
+      fs.rmSync(getSyncSettingsPath(), { force: true });
+    } catch {}
+    setTimeout(relaunchApp, 250);
+    return { ok: true };
+  });
 
   ipcMain.handle("system:open-url", (_event, url) => {
     const target = String(url || "").trim();

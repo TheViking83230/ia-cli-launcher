@@ -43,6 +43,7 @@ const elements = {
   sessionMeta: document.getElementById("sessionMeta"),
   historyButton: document.getElementById("historyButton"),
   shortcutsButton: document.getElementById("shortcutsButton"),
+  syncButton: document.getElementById("syncButton"),
   historyModal: document.getElementById("historyModal"),
   historySearchInput: document.getElementById("historySearchInput"),
   historyClearButton: document.getElementById("historyClearButton"),
@@ -1883,6 +1884,114 @@ function openPersonasModal() {
   createIcons();
 }
 
+// --- Synchronisation des donnees (dossier cloud) ---------------------------
+async function openSyncModal() {
+  let info = { dataDir: "", localDir: "", isCustom: false };
+  try {
+    info = await window.launcher.getSync();
+  } catch {}
+
+  const overlay = document.createElement("div");
+  overlay.className = "changelog-modal";
+
+  const dialog = document.createElement("div");
+  dialog.className = "changelog-dialog shortcuts-dialog";
+
+  const header = document.createElement("div");
+  header.className = "changelog-header";
+  header.innerHTML = '<i data-lucide="refresh-cw"></i><span>Synchronisation des données</span>';
+  dialog.appendChild(header);
+
+  const sub = document.createElement("div");
+  sub.className = "changelog-sub";
+  sub.textContent = "Stocke l'historique, les profils/personas et les sessions dans un dossier synchronisé (OneDrive, Dropbox…) pour les retrouver sur un autre PC.";
+  dialog.appendChild(sub);
+
+  const body = document.createElement("div");
+  body.className = "changelog-body shortcuts-body";
+
+  const statusRow = document.createElement("div");
+  statusRow.className = "sync-status";
+  statusRow.innerHTML = info.isCustom
+    ? '<span class="sync-badge on">Synchronisé</span>'
+    : '<span class="sync-badge off">Stockage local</span>';
+  body.appendChild(statusRow);
+
+  const pathLabel = document.createElement("div");
+  pathLabel.className = "shortcuts-label";
+  pathLabel.textContent = "Emplacement actuel :";
+  const pathValue = document.createElement("div");
+  pathValue.className = "sync-path";
+  pathValue.textContent = info.dataDir || info.localDir || "(inconnu)";
+  body.append(pathLabel, pathValue);
+
+  const note = document.createElement("div");
+  note.className = "sync-note";
+  note.innerHTML = "⚠️ Un seul PC à la fois (sinon conflits cloud). Les identifiants des CLI ne sont pas synchronisés.<br>L'application redémarrera pour appliquer le changement.";
+  body.appendChild(note);
+
+  dialog.appendChild(body);
+
+  const actions = document.createElement("div");
+  actions.className = "changelog-actions shortcuts-actions";
+
+  const left = document.createElement("div");
+  if (info.isCustom) {
+    const disable = document.createElement("button");
+    disable.type = "button";
+    disable.className = "ghost-button danger";
+    disable.textContent = "Revenir au stockage local";
+    disable.addEventListener("click", async () => {
+      if (!window.confirm("Repasser en stockage local et redémarrer ? Les données synchronisées seront recopiées en local.")) {
+        return;
+      }
+      await window.launcher.disableSync();
+    });
+    left.appendChild(disable);
+  }
+
+  const right = document.createElement("div");
+  right.style.display = "flex";
+  right.style.gap = "8px";
+
+  const choose = document.createElement("button");
+  choose.type = "button";
+  choose.className = "primary-button";
+  choose.textContent = info.isCustom ? "Changer de dossier" : "Choisir un dossier synchronisé";
+  choose.addEventListener("click", async () => {
+    const folder = await window.launcher.chooseFolder();
+    if (!folder) {
+      return;
+    }
+    if (!window.confirm(`Synchroniser les données dans :\n${folder}\n\nL'application va redémarrer.`)) {
+      return;
+    }
+    const res = await window.launcher.setSyncDir(folder);
+    if (res && res.ok === false) {
+      flashStatus(`Synchronisation impossible : ${res.error || "erreur"}`);
+    }
+  });
+
+  const close = document.createElement("button");
+  close.type = "button";
+  close.className = "ghost-button";
+  close.textContent = "Fermer";
+  close.addEventListener("click", () => overlay.remove());
+
+  right.append(choose, close);
+  actions.append(left, right);
+  dialog.appendChild(actions);
+
+  overlay.appendChild(dialog);
+  overlay.addEventListener("click", (event) => {
+    if (event.target === overlay) {
+      overlay.remove();
+    }
+  });
+  document.body.appendChild(overlay);
+  createIcons();
+}
+
 function bindEvents() {
   elements.chooseFolderButton.addEventListener("click", async () => {
     updateFolder(await window.launcher.chooseFolder());
@@ -1945,6 +2054,7 @@ function bindEvents() {
   });
   elements.historyButton.addEventListener("click", openHistory);
   elements.shortcutsButton.addEventListener("click", openShortcutsModal);
+  elements.syncButton.addEventListener("click", openSyncModal);
   elements.historyResumeButton.addEventListener("click", resumeFromHistory);
   setupShortcuts();
 
@@ -2373,6 +2483,11 @@ function handleUpdateStatus(payload) {
 // Notes de version affichees apres une mise a jour. La cle est le numero de
 // version, la valeur la liste des nouveautes a montrer.
 const CHANGELOG = {
+  "0.1.11": [
+    "Synchronisation : range l'historique, les profils/personas et les sessions dans un dossier cloud (OneDrive, Dropbox…) pour les retrouver sur un autre PC.",
+    "Bouton de synchronisation dans la barre d'outils : choisir un dossier, ou revenir au stockage local.",
+    "Les identifiants des CLI ne sont jamais synchronisés ; à utiliser sur un seul PC à la fois."
+  ],
   "0.1.10": [
     "Personas : applique des instructions (system prompt) à l'IA au lancement — façon « Gem » / « GPT ».",
     "Bibliothèque de personas personnalisable (bouton « Gérer les personas ») et sélecteur dans « Nouvel onglet ».",
