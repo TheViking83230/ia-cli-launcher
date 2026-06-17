@@ -98,6 +98,9 @@
       "synopsis": "Lanceur de CLI IA avec onglets terminal",
       "description": "Lanceur multi-CLI (Claude Code, Codex, Gemini, etc.) avec onglets terminal."
     },
+    "deb": {
+      "afterInstall": "build/deb-after-install.sh"
+    },
     "nsis": {
       "oneClick": false,
       "perMachine": true,
