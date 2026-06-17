@@ -420,7 +420,7 @@ select:focus {
 
 .title-edit-row {
   display: grid;
-  grid-template-columns: minmax(180px, min(620px, 58vw)) 40px;
+  grid-template-columns: minmax(140px, min(520px, 46vw)) 40px auto;
   align-items: center;
   gap: 8px;
 }
@@ -530,14 +530,84 @@ select:focus {
   position: absolute;
   inset: 0;
   padding: 12px;
+  flex-direction: column;
+  gap: 8px;
 }
 
 .terminal-pane.active {
-  display: block;
+  display: flex;
+}
+
+.terminal-mount {
+  flex: 1 1 auto;
+  min-height: 0;
 }
 
 .terminal-pane .xterm {
   height: 100%;
+}
+
+/* Panneau d'historique conserve lors d'un relais (hors du terminal, donc non
+   efface par la CLI plein ecran qui prend le relais). */
+.relay-history {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  max-height: 42%;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  overflow: hidden;
+}
+
+.relay-history.collapsed {
+  max-height: none;
+}
+
+.relay-history-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--line);
+  background: var(--panel-strong);
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.relay-history.collapsed .relay-history-head {
+  border-bottom: 0;
+}
+
+.relay-history-toggle {
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.relay-history-toggle:hover {
+  color: var(--accent);
+}
+
+.relay-history-body {
+  margin: 0;
+  padding: 10px 12px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--text);
+  font-family: "Cascadia Mono", Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.relay-history.collapsed .relay-history-body {
+  display: none;
 }
 
 .empty-state {
@@ -1404,4 +1474,28 @@ select:focus {
   color: var(--muted);
   font-size: 12px;
   line-height: 1.5;
+}
+
+/* --- Relais (passer la main a une autre IA) ------------------------------- */
+.relay-select {
+  height: 30px;
+  padding: 0 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--panel-strong);
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  max-width: 160px;
+}
+
+.relay-select:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.relay-select:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
 }

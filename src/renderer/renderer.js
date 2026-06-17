@@ -39,6 +39,7 @@ const elements = {
   emptyState: document.getElementById("emptyState"),
   activeTitleInput: document.getElementById("activeTitleInput"),
   renameActiveTabButton: document.getElementById("renameActiveTabButton"),
+  relaySelect: document.getElementById("relaySelect"),
   toggleSidebarButton: document.getElementById("toggleSidebarButton"),
   sessionMeta: document.getElementById("sessionMeta"),
   historyButton: document.getElementById("historyButton"),
@@ -500,6 +501,10 @@ function setActiveSession(id) {
   elements.emptyState.classList.toggle("hidden", Boolean(active));
   elements.activeTitleInput.disabled = !active;
   elements.renameActiveTabButton.disabled = !active;
+  if (elements.relaySelect) {
+    elements.relaySelect.disabled = !active;
+    elements.relaySelect.value = "";
+  }
   elements.activeTitleInput.value = active?.title || "Aucun onglet";
   elements.sessionMeta.textContent = active ? `${active.command} | ${active.cwd}` : "Pret";
 
@@ -665,6 +670,12 @@ function createTerminalContainer(id) {
   const container = document.createElement("div");
   container.className = "terminal-pane";
   container.dataset.sessionId = id;
+  // Le terminal xterm est monte dans un sous-noeud dedie : on peut ainsi
+  // afficher un panneau d'historique au-dessus sans qu'il soit efface par la
+  // CLI (lors d'un relais).
+  const mount = document.createElement("div");
+  mount.className = "terminal-mount";
+  container.appendChild(mount);
   elements.terminalHost.appendChild(container);
   return container;
 }
@@ -701,7 +712,7 @@ async function openTerminalSession({ title, accent, starter, replayText, spec })
     container: createTerminalContainer(startResult.id)
   };
 
-  terminal.open(session.container);
+  terminal.open(session.container.querySelector(".terminal-mount"));
   fitAddon.fit();
 
   // Rejoue l'historique sauvegarde avant que la session ne soit enregistree,
@@ -744,6 +755,7 @@ async function openTerminalSession({ title, accent, starter, replayText, spec })
   });
 
   registerSession(session);
+  return session;
 }
 
 async function restoreSession(saved) {
@@ -901,6 +913,38 @@ function renderRestoreSection(savedSessions) {
 // Lance une session a partir d'un profil/mode/dossier. Centralise pour etre
 // reutilise par le bouton "Lancer" comme par les raccourcis (dupliquer,
 // relancer, rouvrir la derniere session fermee).
+// Envoie un texte comme PREMIER message dans le terminal d'une session, une
+// fois la CLI prete (utilise pour les CLI qui n'ont pas de canal "instructions"
+// fiable, ex. Codex : la persona/contexte est tape comme message d'ouverture).
+function sendFirstMessage(session, text) {
+  const oneLine = String(text || "").replace(/\s+/g, " ").trim();
+  if (!oneLine) {
+    return;
+  }
+  const started = Date.now();
+  const attempt = () => {
+    if (!state.sessions.has(session.id)) {
+      return; // session fermee entre-temps
+    }
+    // On attend que la CLI ait affiche quelque chose (prete a recevoir), avec
+    // un repli au bout de 6 s.
+    if (session.hasOutput || Date.now() - started > 6000) {
+      window.setTimeout(() => {
+        if (state.sessions.has(session.id)) {
+          window.launcher.writeTerminal(session.id, `${oneLine}\r`);
+        }
+      }, 1500);
+    } else {
+      window.setTimeout(attempt, 300);
+    }
+  };
+  attempt();
+}
+
+function framePersonaMessage(personaPrompt) {
+  return `Consigne de session à respecter STRICTEMENT pour toutes tes réponses, comme si elle faisait partie de ta configuration : ${personaPrompt} — Réponds simplement « Compris. » puis attends ma demande.`;
+}
+
 async function launchFromProfile({ profileId, modeId, extraArgs, cwd, title, accent, personaId }) {
   const profile = state.config.profiles.find((p) => p.id === profileId);
   const mode = profile?.modes.find((m) => m.id === modeId);
@@ -922,7 +966,7 @@ async function launchFromProfile({ profileId, modeId, extraArgs, cwd, title, acc
     personaId: persona ? personaId : ""
   };
 
-  await openTerminalSession({
+  const session = await openTerminalSession({
     title: finalTitle,
     accent: spec.accent,
     spec,
@@ -944,6 +988,14 @@ async function launchFromProfile({ profileId, modeId, extraArgs, cwd, title, acc
         rows
       })
   });
+
+  // CLI sans canal d'instructions fiable (ex. Codex) : on envoie la persona
+  // comme premier message une fois la CLI prete.
+  if (session && persona && profile.personaInjection?.kind === "first-message") {
+    sendFirstMessage(session, framePersonaMessage(persona.prompt));
+  }
+
+  return session;
 }
 
 async function launchSession() {
@@ -1037,6 +1089,203 @@ function reopenLastClosed() {
     launchFromProfile(lastClosedSpec);
   } else {
     flashStatus("Réouverture indisponible pour cette session.");
+  }
+}
+
+// --- Relais : passer la main à une autre IA dans le MÊME onglet ------------
+function getProfileLabel(profileId) {
+  return state.config.profiles.find((p) => p.id === profileId)?.label || "";
+}
+
+// Remplit le selecteur de relais (placeholder + toutes les CLI).
+function renderRelayOptions() {
+  if (!elements.relaySelect) {
+    return;
+  }
+  elements.relaySelect.innerHTML = "";
+  const placeholder = document.createElement("option");
+  placeholder.value = "";
+  placeholder.textContent = "Relais →";
+  elements.relaySelect.appendChild(placeholder);
+  for (const profile of sortProfiles(state.config.profiles)) {
+    const option = document.createElement("option");
+    option.value = profile.id;
+    option.textContent = profile.label;
+    elements.relaySelect.appendChild(option);
+  }
+  elements.relaySelect.value = "";
+}
+
+// Construit le contexte injecte silencieusement a la nouvelle IA pour qu'elle
+// poursuive la conversation comme si elle y avait toujours ete.
+const HANDOFF_MAX_CHARS = 60000;
+function buildHandoffPrompt(conversationText, fromName, personaText) {
+  let convo = String(conversationText || "").trim();
+  if (convo.length > HANDOFF_MAX_CHARS) {
+    convo = `[…début de la conversation tronqué…]\n${convo.slice(-HANDOFF_MAX_CHARS)}`;
+  }
+  const preamble = [
+    "Tu poursuis une conversation de développement déjà en cours : l'assistant précédent te passe la main.",
+    "Continue naturellement, comme si tu y avais participé depuis le début. Ne mentionne PAS ce changement d'assistant et n'en parle pas à l'utilisateur.",
+    "Le dossier de travail et les fichiers déjà modifiés sont intacts ; appuie-toi dessus.",
+    "",
+    "=== Conversation jusqu'ici ===",
+    convo,
+    "=== Fin de la conversation, à toi de continuer ==="
+  ].join("\n");
+  return personaText ? `${personaText}\n\n${preamble}` : preamble;
+}
+
+// Affiche/actualise le panneau d'historique (hors terminal) d'une session.
+function showRelayHistory(session) {
+  const container = session.container;
+  let panel = container.querySelector(".relay-history");
+  if (!panel) {
+    panel = document.createElement("div");
+    // Replie par defaut : le terminal affiche uniquement la nouvelle IA. Le
+    // fil complet reste accessible ici (depliable) et dans l'Historique global.
+    panel.className = "relay-history collapsed";
+
+    const head = document.createElement("div");
+    head.className = "relay-history-head";
+    const title = document.createElement("span");
+    title.className = "relay-history-title";
+    const toggle = document.createElement("button");
+    toggle.type = "button";
+    toggle.className = "relay-history-toggle";
+    toggle.textContent = "Afficher ▸";
+    toggle.addEventListener("click", () => {
+      const collapsed = panel.classList.toggle("collapsed");
+      toggle.textContent = collapsed ? "Afficher ▸" : "Masquer ▾";
+      const active = state.sessions.get(state.activeSessionId);
+      if (active) {
+        active.fitAddon.fit();
+        window.launcher.resizeTerminal(active.id, active.terminal.cols, active.terminal.rows);
+      }
+    });
+    head.append(title, toggle);
+
+    const body = document.createElement("pre");
+    body.className = "relay-history-body";
+
+    panel.append(head, body);
+    container.insertBefore(panel, container.firstChild);
+  }
+
+  panel.querySelector(".relay-history-title").textContent = `Historique de la conversation — ${session.relayChain}`;
+  const body = panel.querySelector(".relay-history-body");
+  body.textContent = session.relayHistory;
+  body.scrollTop = body.scrollHeight;
+
+  // Le terminal a perdu de la hauteur : on reajuste apres le rendu.
+  setTimeout(() => {
+    session.fitAddon.fit();
+    window.launcher.resizeTerminal(session.id, session.terminal.cols, session.terminal.rows);
+  }, 30);
+}
+
+async function relaySession(id, profileId) {
+  const session = state.sessions.get(id);
+  if (!session) {
+    return;
+  }
+  const profile = state.config.profiles.find((p) => p.id === profileId);
+  const mode = profile?.modes.find((m) => m.id === profile.defaultModeId) || profile?.modes?.[0];
+  if (!profile || !mode) {
+    flashStatus("CLI cible indisponible pour le relais.");
+    return;
+  }
+
+  const fromName = getProfileLabel(session.spec?.profileId) || "l'assistant précédent";
+  flashStatus(`Relais vers ${profile.label}…`);
+
+  // 1. Capture de la conversation en cours (transcription nettoyee).
+  let raw = "";
+  try {
+    raw = await window.launcher.readScrollback(session.id);
+  } catch {}
+  const segment = stripAnsi(raw).trim();
+  // On accumule l'historique a travers les relais successifs (chaque CLI a sa
+  // propre transcription) pour ne jamais perdre le fil complet.
+  const fullHistory = session.relayHistory
+    ? `${session.relayHistory}\n\n──── ${fromName} → ${profile.label} ────\n\n${segment}`
+    : segment;
+  session.relayHistory = fullHistory;
+  session.relayChain = session.relayChain ? `${session.relayChain} → ${profile.label}` : `${fromName} → ${profile.label}`;
+  const personaText = session.spec?.personaId ? getPersonaById(session.spec.personaId)?.prompt || "" : "";
+  const handoff = buildHandoffPrompt(fullHistory, fromName, personaText);
+
+  // 2. Historique conserve dans un panneau HTML AU-DESSUS du terminal : la CLI
+  //    plein ecran qui prend le relais efface le terminal, mais pas ce panneau.
+  showRelayHistory(session);
+
+  // 3. On coupe le message de fin de process pour ce relais.
+  session.relaying = true;
+
+  // 4. On arrete l'IA en cours.
+  try {
+    await window.launcher.killTerminal(session.id);
+  } catch {}
+
+  // 5. On relance la nouvelle IA dans le MÊME dossier, contexte injecte en
+  //    silencieux (system prompt / fichier de contexte selon la CLI).
+  let startResult;
+  try {
+    startResult = await window.launcher.startTerminal({
+      title: session.title,
+      command: profile.command,
+      modeArgs: mode.args || [],
+      preLaunchCommands: mode.preLaunchCommands || [],
+      extraArgs: "",
+      cwd: session.cwd,
+      profileId: profile.id,
+      profileLabel: profile.label,
+      modeId: mode.id,
+      modeLabel: mode.label,
+      personaPrompt: handoff,
+      personaInjection: profile.personaInjection || null,
+      cols: session.terminal.cols,
+      rows: session.terminal.rows
+    });
+  } catch (error) {
+    session.relaying = false;
+    session.terminal.writeln(`\r\n[relais échoué: ${error.message || error}]`);
+    session.tab.classList.add("ended");
+    return;
+  }
+
+  // 6. On rebranche le MÊME onglet/terminal sur le nouveau process (nouvel id).
+  //    Les handlers d'entree/sortie lisent session.id en direct : il suffit de
+  //    re-cler la session dans la Map.
+  state.sessions.delete(id);
+  session.id = startResult.id;
+  session.command = startResult.command;
+  session.cwd = startResult.cwd;
+  session.accent = profile.accent;
+  session.spec = {
+    kind: "profile",
+    title: session.title,
+    accent: profile.accent,
+    profileId: profile.id,
+    modeId: mode.id,
+    extraArgs: "",
+    cwd: session.cwd,
+    personaId: session.spec?.personaId || ""
+  };
+  state.sessions.set(session.id, session);
+  session.relaying = false;
+  session.tab.classList.remove("ended");
+  session.tab.style.setProperty("--tab-accent", profile.accent);
+  if (state.activeSessionId === id) {
+    state.activeSessionId = session.id;
+  }
+  setActiveSession(session.id);
+
+  // CLI sans canal d'instructions fiable (ex. Codex) : le contexte de relais
+  // est envoye comme premier message une fois la nouvelle CLI prete.
+  if (profile.personaInjection?.kind === "first-message") {
+    session.hasOutput = false;
+    sendFirstMessage(session, handoff);
   }
 }
 
@@ -2007,6 +2256,13 @@ function bindEvents() {
     window.localStorage.setItem("lastPersonaId", elements.personaSelect.value || "");
   });
   elements.managePersonasButton.addEventListener("click", openPersonasModal);
+  elements.relaySelect.addEventListener("change", () => {
+    const targetId = elements.relaySelect.value;
+    elements.relaySelect.value = "";
+    if (targetId && state.activeSessionId) {
+      relaySession(state.activeSessionId, targetId);
+    }
+  });
   elements.saveProfileButton.addEventListener("click", saveProfileEdits);
   elements.launchButton.addEventListener("click", launchSession);
   elements.installProfileButton.addEventListener("click", installSelectedProfile);
@@ -2123,6 +2379,7 @@ function bindEvents() {
   window.launcher.onTerminalData(({ id, data }) => {
     const session = state.sessions.get(id);
     if (session) {
+      session.hasOutput = true;
       session.terminal.write(data);
     }
   });
@@ -2130,6 +2387,11 @@ function bindEvents() {
   window.launcher.onTerminalExit(({ id, exitCode }) => {
     const session = state.sessions.get(id);
     if (session) {
+      // Pendant un relais on coupe volontairement l'IA en cours : on n'affiche
+      // pas le message de fin ni l'etat "termine".
+      if (session.relaying) {
+        return;
+      }
       session.terminal.writeln(`\r\n[processus termine: ${exitCode}]`);
       session.tab.classList.add("ended");
     }
@@ -2483,6 +2745,11 @@ function handleUpdateStatus(payload) {
 // Notes de version affichees apres une mise a jour. La cle est le numero de
 // version, la valeur la liste des nouveautes a montrer.
 const CHANGELOG = {
+  "0.1.12": [
+    "Relais entre IA : passe la main d'une CLI à une autre dans le même onglet, sans perdre le fil.",
+    "La nouvelle IA reçoit le contexte en silencieux et poursuit comme si elle y était depuis le début.",
+    "Sélecteur « Relais → » à côté du titre de l'onglet ; repère discret dans le terminal au moment du passage."
+  ],
   "0.1.11": [
     "Synchronisation : range l'historique, les profils/personas et les sessions dans un dossier cloud (OneDrive, Dropbox…) pour les retrouver sur un autre PC.",
     "Bouton de synchronisation dans la barre d'outils : choisir un dossier, ou revenir au stockage local.",
@@ -2639,6 +2906,7 @@ async function init() {
   updateFolder(window.localStorage.getItem("lastFolder") || "");
   renderProfiles();
   renderPersonas();
+  renderRelayOptions();
   refreshAuthStatus();
   createIcons();
 

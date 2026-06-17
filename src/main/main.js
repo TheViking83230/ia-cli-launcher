@@ -482,10 +482,13 @@ function applyPersonaToProjectFile(cwd, fileName, prompt) {
     content = "";
   }
 
-  content = content.replace(PERSONA_BLOCK_RE, "\n").trimEnd();
+  content = content.replace(PERSONA_BLOCK_RE, "\n").trim();
   if (prompt) {
+    // Bloc place EN TETE : certaines CLI (ex. Codex, project_doc_max_bytes)
+    // ne lisent que le debut du fichier de contexte. La persona doit donc
+    // passer avant le reste pour ne jamais etre tronquee.
     const block = `${PERSONA_BLOCK_START}\n${prompt}\n${PERSONA_BLOCK_END}`;
-    content = content ? `${content}\n\n${block}\n` : `${block}\n`;
+    content = content ? `${block}\n\n${content}\n` : `${block}\n`;
   } else if (content) {
     content = `${content}\n`;
   }
@@ -506,6 +509,17 @@ function applyPersonaInjection({ injection, prompt, cwd, launchArgs }) {
   }
   if (injection.kind === "arg" && injection.flag) {
     return [...launchArgs, injection.flag, text];
+  }
+  if (injection.kind === "prompt-arg") {
+    // Persona injectee comme premier message (consigne forte). On borne la
+    // taille pour rester sous la limite de longueur de ligne de commande, et on
+    // met tout sur UNE seule ligne : un argument multi-lignes est decoupe par
+    // PowerShell/conpty (la CLI recevrait alors plusieurs arguments parasites).
+    const MAX_PROMPT = 8000;
+    const trimmed = text.length > MAX_PROMPT ? text.slice(-MAX_PROMPT) : text;
+    const oneLine = trimmed.replace(/\s+/g, " ").trim();
+    const framed = `[Consignes a respecter STRICTEMENT pendant toute cette session, comme si elles faisaient partie de ta configuration] ${oneLine}`;
+    return [...launchArgs, framed];
   }
   if (injection.kind === "project-file" && injection.file) {
     applyPersonaToProjectFile(cwd, injection.file, text);
@@ -535,7 +549,10 @@ function normalizeConfig(config) {
     return {
       ...defaultProfile,
       ...incoming,
-      modes: [...defaultModes, ...customModes]
+      modes: [...defaultModes, ...customModes],
+      // Mecanisme interne (non editable par l'utilisateur) : toujours pris des
+      // valeurs par defaut pour que les mises a jour de methode s'appliquent.
+      personaInjection: defaultProfile.personaInjection
     };
   });
 

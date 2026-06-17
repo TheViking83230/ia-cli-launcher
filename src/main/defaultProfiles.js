@@ -376,7 +376,10 @@ const defaultProfiles = [
 const personaInjectionById = {
   claude: { kind: "arg-file", flag: "--append-system-prompt-file" },
   aider: { kind: "arg-file", flag: "--read" },
-  codex: { kind: "project-file", file: "AGENTS.md" },
+  // Codex charge AGENTS.md comme "doc projet" mais n'obeit pas a une persona
+  // via ce canal. On l'injecte donc comme premier message (envoye au terminal
+  // apres lancement) : c'est ce que Codex respecte vraiment.
+  codex: { kind: "first-message" },
   opencode: { kind: "project-file", file: "AGENTS.md" },
   cursor: { kind: "project-file", file: "AGENTS.md" },
   amp: { kind: "project-file", file: "AGENTS.md" },
