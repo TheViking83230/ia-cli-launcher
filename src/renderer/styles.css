@@ -952,7 +952,7 @@ select:focus {
 
 .footer {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(180px, 38%);
+  grid-template-columns: minmax(0, 1fr) auto auto;
   align-items: center;
   gap: 16px;
   padding: 0 16px;
@@ -960,6 +960,11 @@ select:focus {
   background: #151820;
   color: var(--muted);
   font-size: 12px;
+}
+
+.app-version {
+  opacity: 0.7;
+  font-variant-numeric: tabular-nums;
 }
 
 .footer span {
@@ -1474,6 +1479,125 @@ select:focus {
   color: var(--muted);
   font-size: 12px;
   line-height: 1.5;
+}
+
+/* --- Synchro Google Drive native ----------------------------------------- */
+.gdrive-section {
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
+}
+
+.gdrive-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.gdrive-title i {
+  width: 16px;
+  height: 16px;
+}
+
+.gdrive-desc {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+  margin: 6px 0 12px;
+}
+
+.gdrive-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.gdrive-email {
+  margin-left: 8px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.gdrive-last {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.gdrive-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 4px;
+}
+
+.text-input {
+  height: 32px;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 13px;
+  width: 100%;
+}
+
+.text-input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.link-button {
+  align-self: flex-start;
+  background: none;
+  border: none;
+  color: var(--accent);
+  font-size: 12px;
+  cursor: pointer;
+  padding: 0;
+  text-decoration: underline;
+}
+
+/* --- Tuto identifiant Google Drive --------------------------------------- */
+.gdrive-link-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 14px;
+}
+
+.gdrive-link-row .text-input {
+  flex: 1;
+  font-family: "Cascadia Mono", Consolas, monospace;
+  font-size: 12px;
+}
+
+.gdrive-link-row button {
+  white-space: nowrap;
+}
+
+.gdrive-steps {
+  margin: 0;
+  padding-left: 22px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.gdrive-steps li {
+  color: var(--text);
+}
+
+.gdrive-step-title {
+  font-weight: 700;
+}
+
+.gdrive-step-desc {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+  margin-top: 2px;
 }
 
 /* --- Relais (passer la main a une autre IA) ------------------------------- */

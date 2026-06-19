@@ -6,6 +6,7 @@ const pty = require("@lydell/node-pty");
 const { autoUpdater } = require("electron-updater");
 const { defaultProfiles, defaultPersonas } = require("./defaultProfiles");
 const platform = require("./platform");
+const gdrive = require("./gdrive");
 
 // Sous Linux, certaines distributions recentes (Ubuntu 24.04+) bloquent les
 // "user namespaces" non privilegies : le sandbox Chromium ne peut alors pas
@@ -123,6 +124,28 @@ function relaunchApp() {
   app.exit(0);
 }
 
+// --- Push automatique vers Google Drive (si connecte), debounce -------------
+// Quand la synchro Google Drive native est active, on pousse les donnees apres
+// chaque ecriture, regroupees pour eviter de spammer l'API.
+let gdrivePushTimer = null;
+
+function scheduleGdrivePush() {
+  if (!gdrive.isConnected()) {
+    return;
+  }
+  clearTimeout(gdrivePushTimer);
+  gdrivePushTimer = setTimeout(() => {
+    gdrive
+      .syncOnce(getDataDir())
+      .then((res) => {
+        if (res?.ok && mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.send("gdrive:synced", gdrive.getStatus());
+        }
+      })
+      .catch(() => {});
+  }, 4000);
+}
+
 function getSessionsPath() {
   return path.join(getDataDir(), "sessions.json");
 }
@@ -155,6 +178,7 @@ function saveSessionsToDisk() {
   }));
   try {
     fs.writeFileSync(getSessionsPath(), JSON.stringify(data, null, 2), "utf8");
+    scheduleGdrivePush();
   } catch {}
 }
 
@@ -184,6 +208,7 @@ function saveHistoryIndex(entries) {
   try {
     fs.mkdirSync(getHistoryDir(), { recursive: true });
     fs.writeFileSync(getHistoryIndexPath(), JSON.stringify(entries, null, 2), "utf8");
+    scheduleGdrivePush();
   } catch {}
 }
 
@@ -245,6 +270,7 @@ function flushTranscript(session) {
   try {
     fs.mkdirSync(getHistoryDir(), { recursive: true });
     fs.writeFileSync(getTranscriptPath(session.id), session.output || "", "utf8");
+    scheduleGdrivePush();
   } catch {}
 }
 
@@ -392,6 +418,22 @@ function createWindow() {
 
   mainWindow.loadFile(path.join(__dirname, "../renderer/index.html"));
   mainWindow.once("ready-to-show", () => mainWindow.show());
+
+  // Synchro Google Drive au demarrage : on tire le contenu distant le plus
+  // recent, puis on demande au renderer de recharger config + historique.
+  mainWindow.webContents.once("did-finish-load", () => {
+    if (!gdrive.isConnected()) {
+      return;
+    }
+    gdrive
+      .syncOnce(getDataDir())
+      .then((res) => {
+        if (res?.ok && mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.send("gdrive:synced", gdrive.getStatus(), res.pulled > 0);
+        }
+      })
+      .catch(() => {});
+  });
   mainWindow.on("close", () => {
     flushAllTranscripts();
     saveSessionsToDisk();
@@ -593,6 +635,7 @@ function readConfig() {
 function writeConfig(config) {
   const normalized = normalizeConfig(config);
   fs.writeFileSync(getConfigPath(), JSON.stringify(normalized, null, 2), "utf8");
+  scheduleGdrivePush();
   return normalized;
 }
 
@@ -981,6 +1024,33 @@ app.whenReady().then(() => {
     return { ok: true };
   });
 
+  // --- Synchronisation native Google Drive (sans Google Drive Desktop) ---
+  ipcMain.handle("gdrive:status", () => gdrive.getStatus());
+
+  ipcMain.handle("gdrive:set-credentials", (_event, creds) =>
+    gdrive.setCredentials(creds?.clientId, creds?.clientSecret)
+  );
+
+  ipcMain.handle("gdrive:connect", async () => {
+    const result = await gdrive.connect();
+    if (result.ok) {
+      // Premiere synchro juste apres la connexion (tire le contenu distant).
+      const sync = await gdrive.syncOnce(getDataDir());
+      return { ...result, sync, status: gdrive.getStatus() };
+    }
+    return result;
+  });
+
+  ipcMain.handle("gdrive:disconnect", async () => {
+    const result = await gdrive.disconnect();
+    return { ...result, status: gdrive.getStatus() };
+  });
+
+  ipcMain.handle("gdrive:sync-now", async () => {
+    const result = await gdrive.syncOnce(getDataDir());
+    return { ...result, status: gdrive.getStatus() };
+  });
+
   ipcMain.handle("system:open-url", (_event, url) => {
     const target = String(url || "").trim();
     if (/^https?:\/\//i.test(target)) {
@@ -1166,6 +1236,25 @@ app.whenReady().then(() => {
     session.pty.write(quotedPath);
     return true;
   });
+});
+
+// Pousse une derniere fois vers Google Drive avant de quitter (si connecte),
+// avec un garde-fou de 8 s pour ne jamais bloquer la fermeture.
+let finalSyncDone = false;
+app.on("before-quit", (event) => {
+  if (finalSyncDone || !gdrive.isConnected()) {
+    return;
+  }
+  event.preventDefault();
+  finalSyncDone = true;
+  try {
+    flushAllTranscripts();
+    saveSessionsToDisk();
+  } catch {}
+  Promise.race([
+    gdrive.syncOnce(getDataDir()),
+    new Promise((resolve) => setTimeout(resolve, 8000))
+  ]).finally(() => app.quit());
 });
 
 app.on("window-all-closed", () => {

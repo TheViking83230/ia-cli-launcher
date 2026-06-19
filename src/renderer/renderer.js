@@ -11,6 +11,7 @@ const elements = {
   appShell: document.getElementById("appShell"),
   adminStatus: document.getElementById("adminStatus"),
   shellLabel: document.getElementById("shellLabel"),
+  appVersionLabel: document.getElementById("appVersionLabel"),
   chooseFolderButton: document.getElementById("chooseFolderButton"),
   folderPath: document.getElementById("folderPath"),
   tabTitleInput: document.getElementById("tabTitleInput"),
@@ -2134,10 +2135,281 @@ function openPersonasModal() {
 }
 
 // --- Synchronisation des donnees (dossier cloud) ---------------------------
+function formatLastSync(ts) {
+  if (!ts) {
+    return "jamais";
+  }
+  try {
+    return new Date(ts).toLocaleString("fr-FR", { dateStyle: "short", timeStyle: "short" });
+  } catch {
+    return "—";
+  }
+}
+
+// Construit le bloc "Google Drive" de la modale de synchronisation.
+// `gstatus` = { configured, connected, clientId, email, lastSync }.
+function buildGdriveSection(gstatus) {
+  const section = document.createElement("div");
+  section.className = "gdrive-section";
+
+  const title = document.createElement("div");
+  title.className = "gdrive-title";
+  title.innerHTML = '<i data-lucide="hard-drive"></i><span>Google Drive (sans logiciel à installer)</span>';
+  section.appendChild(title);
+
+  const desc = document.createElement("div");
+  desc.className = "gdrive-desc";
+  desc.textContent = "Connecte directement ton Drive : pas besoin de Google Drive Desktop. Les données sont rangées dans un dossier privé propre à l'app (l'app ne voit rien d'autre de ton Drive).";
+  section.appendChild(desc);
+
+  const render = () => {
+    // On reconstruit le corps a chaque changement d'etat.
+    [...section.querySelectorAll(".gdrive-body")].forEach((n) => n.remove());
+    const sbody = document.createElement("div");
+    sbody.className = "gdrive-body";
+
+    if (gstatus.connected) {
+      const badge = document.createElement("div");
+      badge.className = "sync-status";
+      badge.innerHTML = `<span class="sync-badge on">Connecté</span><span class="gdrive-email">${gstatus.email || ""}</span>`;
+      sbody.appendChild(badge);
+
+      const last = document.createElement("div");
+      last.className = "gdrive-last";
+      last.textContent = `Dernière synchro : ${formatLastSync(gstatus.lastSync)}`;
+      sbody.appendChild(last);
+
+      const row = document.createElement("div");
+      row.className = "gdrive-actions";
+
+      const syncNow = document.createElement("button");
+      syncNow.type = "button";
+      syncNow.className = "primary-button";
+      syncNow.textContent = "Synchroniser maintenant";
+      syncNow.addEventListener("click", async () => {
+        syncNow.disabled = true;
+        syncNow.textContent = "Synchronisation…";
+        const res = await window.launcher.gdriveSyncNow();
+        if (res?.ok) {
+          gstatus = res.status || gstatus;
+          flashStatus(`Drive synchronisé (${res.pulled || 0} reçus, ${res.pushed || 0} envoyés).`);
+          if (res.pulled > 0) {
+            await reloadAfterGdrivePull();
+          }
+        } else {
+          flashStatus(`Synchro Drive impossible : ${res?.error || "erreur"}`);
+        }
+        render();
+        createIcons();
+      });
+
+      const disconnect = document.createElement("button");
+      disconnect.type = "button";
+      disconnect.className = "ghost-button danger";
+      disconnect.textContent = "Déconnecter";
+      disconnect.addEventListener("click", async () => {
+        if (!window.confirm("Déconnecter Google Drive ? Les données locales sont conservées, mais ne seront plus synchronisées.")) {
+          return;
+        }
+        const res = await window.launcher.gdriveDisconnect();
+        gstatus = res?.status || { ...gstatus, connected: false };
+        render();
+        createIcons();
+      });
+
+      row.append(syncNow, disconnect);
+      sbody.appendChild(row);
+    } else {
+      // Champ identifiant client (PKCE desktop, non secret).
+      const idLabel = document.createElement("div");
+      idLabel.className = "shortcuts-label";
+      idLabel.textContent = "Identifiant client OAuth Google (type « Application de bureau ») :";
+      const idInput = document.createElement("input");
+      idInput.type = "text";
+      idInput.className = "text-input gdrive-clientid";
+      idInput.placeholder = "xxxxxxxx.apps.googleusercontent.com";
+      idInput.value = gstatus.clientId || "";
+      sbody.append(idLabel, idInput);
+
+      const secretLabel = document.createElement("div");
+      secretLabel.className = "shortcuts-label";
+      secretLabel.textContent = "Secret client (fourni avec l'identifiant « Application de bureau ») :";
+      const secretInput = document.createElement("input");
+      secretInput.type = "text";
+      secretInput.className = "text-input gdrive-clientsecret";
+      secretInput.placeholder = "GOCSPX-…";
+      secretInput.value = gstatus.clientSecret || "";
+      sbody.append(secretLabel, secretInput);
+
+      const help = document.createElement("button");
+      help.type = "button";
+      help.className = "link-button";
+      help.textContent = "Comment obtenir cet identifiant ? (guide)";
+      help.addEventListener("click", () => openGdriveHelp());
+      sbody.appendChild(help);
+
+      const row = document.createElement("div");
+      row.className = "gdrive-actions";
+
+      const connect = document.createElement("button");
+      connect.type = "button";
+      connect.className = "primary-button";
+      connect.textContent = "Connecter Google Drive";
+      connect.addEventListener("click", async () => {
+        const clientId = idInput.value.trim();
+        const clientSecret = secretInput.value.trim();
+        if (!clientId || !clientSecret) {
+          flashStatus("Renseigne l'identifiant client ET le secret client Google.");
+          return;
+        }
+        await window.launcher.gdriveSetCredentials(clientId, clientSecret);
+        connect.disabled = true;
+        connect.textContent = "Autorisation dans le navigateur…";
+        const res = await window.launcher.gdriveConnect();
+        if (res?.ok) {
+          gstatus = res.status || { ...gstatus, connected: true, email: res.email };
+          flashStatus(`Google Drive connecté (${res.email || ""}).`);
+          if (res.sync?.pulled > 0) {
+            await reloadAfterGdrivePull();
+          }
+          render();
+          createIcons();
+        } else {
+          connect.disabled = false;
+          connect.textContent = "Connecter Google Drive";
+          flashStatus(`Connexion Drive impossible : ${res?.error || "erreur"}`);
+        }
+      });
+
+      row.appendChild(connect);
+      sbody.appendChild(row);
+    }
+
+    section.appendChild(sbody);
+  };
+
+  render();
+  return section;
+}
+
+// Recharge config + historique apres avoir tire des donnees depuis le Drive.
+async function reloadAfterGdrivePull() {
+  try {
+    state.config = await window.launcher.getConfig();
+    renderProfiles();
+    renderPersonas();
+    refreshAuthStatus();
+  } catch {}
+}
+
+// Aide pas-a-pas (fenetre propre) pour creer l'identifiant client Google.
+function openGdriveHelp() {
+  const url = "https://console.cloud.google.com/apis/credentials";
+  const steps = [
+    { t: "Ouvre la console Google Cloud", d: "Crée un projet (ou choisis-en un existant)." },
+    { t: "Active l'API Drive", d: "Menu « APIs et services » → « Bibliothèque » → cherche et active « Google Drive API »." },
+    { t: "Configure l'écran de consentement", d: "« APIs et services » → « Écran de consentement OAuth » → type « Externe ». Renseigne le nom de l'app et ton e-mail, puis ajoute ton compte Google dans « Utilisateurs de test »." },
+    { t: "Crée l'identifiant OAuth", d: "« Identifiants » → « Créer des identifiants » → « ID client OAuth » → type d'application : « Application de bureau »." },
+    { t: "Copie les deux valeurs", d: "Récupère l'« ID client » (finit par .apps.googleusercontent.com) et le « Secret client » (commence par GOCSPX-), puis colle-les dans l'application." }
+  ];
+
+  const overlay = document.createElement("div");
+  overlay.className = "changelog-modal";
+
+  const dialog = document.createElement("div");
+  dialog.className = "changelog-dialog shortcuts-dialog";
+
+  const header = document.createElement("div");
+  header.className = "changelog-header";
+  header.innerHTML = '<i data-lucide="key-round"></i><span>Obtenir un identifiant Google Drive</span>';
+  dialog.appendChild(header);
+
+  const body = document.createElement("div");
+  body.className = "changelog-body shortcuts-body";
+
+  // Lien copiable vers la console.
+  const linkRow = document.createElement("div");
+  linkRow.className = "gdrive-link-row";
+  const linkField = document.createElement("input");
+  linkField.type = "text";
+  linkField.className = "text-input";
+  linkField.readOnly = true;
+  linkField.value = url;
+  linkField.addEventListener("focus", () => linkField.select());
+  const copyBtn = document.createElement("button");
+  copyBtn.type = "button";
+  copyBtn.className = "ghost-button";
+  copyBtn.textContent = "Copier";
+  copyBtn.addEventListener("click", async () => {
+    try {
+      await navigator.clipboard.writeText(url);
+    } catch {
+      linkField.select();
+      document.execCommand("copy");
+    }
+    copyBtn.textContent = "Copié ✓";
+    setTimeout(() => (copyBtn.textContent = "Copier"), 1500);
+  });
+  const openBtn = document.createElement("button");
+  openBtn.type = "button";
+  openBtn.className = "primary-button";
+  openBtn.textContent = "Ouvrir";
+  openBtn.addEventListener("click", () => window.launcher.openUrl(url));
+  linkRow.append(linkField, copyBtn, openBtn);
+  body.appendChild(linkRow);
+
+  // Etapes numerotees.
+  const list = document.createElement("ol");
+  list.className = "gdrive-steps";
+  for (const step of steps) {
+    const li = document.createElement("li");
+    const strong = document.createElement("div");
+    strong.className = "gdrive-step-title";
+    strong.textContent = step.t;
+    const small = document.createElement("div");
+    small.className = "gdrive-step-desc";
+    small.textContent = step.d;
+    li.append(strong, small);
+    list.appendChild(li);
+  }
+  body.appendChild(list);
+
+  const tip = document.createElement("div");
+  tip.className = "sync-note";
+  tip.innerHTML = "ℹ️ Le « Secret client » n'est pas confidentiel pour ce type d'application, mais Google l'exige pour finaliser la connexion.";
+  body.appendChild(tip);
+
+  dialog.appendChild(body);
+
+  const actions = document.createElement("div");
+  actions.className = "changelog-actions shortcuts-actions";
+  const spacer = document.createElement("div");
+  const close = document.createElement("button");
+  close.type = "button";
+  close.className = "ghost-button";
+  close.textContent = "Fermer";
+  close.addEventListener("click", () => overlay.remove());
+  actions.append(spacer, close);
+  dialog.appendChild(actions);
+
+  overlay.appendChild(dialog);
+  overlay.addEventListener("click", (event) => {
+    if (event.target === overlay) {
+      overlay.remove();
+    }
+  });
+  document.body.appendChild(overlay);
+  createIcons();
+}
+
 async function openSyncModal() {
   let info = { dataDir: "", localDir: "", isCustom: false };
   try {
     info = await window.launcher.getSync();
+  } catch {}
+  let gstatus = { configured: false, connected: false, clientId: "", email: "", lastSync: 0 };
+  try {
+    gstatus = await window.launcher.gdriveStatus();
   } catch {}
 
   const overlay = document.createElement("div");
@@ -2153,7 +2425,7 @@ async function openSyncModal() {
 
   const sub = document.createElement("div");
   sub.className = "changelog-sub";
-  sub.textContent = "Stocke l'historique, les profils/personas et les sessions dans un dossier synchronisé (OneDrive, Dropbox…) pour les retrouver sur un autre PC.";
+  sub.textContent = "Retrouve l'historique, les profils/personas et les sessions sur un autre PC : via un dossier déjà synchronisé (OneDrive, Dropbox…) ou directement avec Google Drive.";
   dialog.appendChild(sub);
 
   const body = document.createElement("div");
@@ -2178,6 +2450,10 @@ async function openSyncModal() {
   note.className = "sync-note";
   note.innerHTML = "⚠️ Un seul PC à la fois (sinon conflits cloud). Les identifiants des CLI ne sont pas synchronisés.<br>L'application redémarrera pour appliquer le changement.";
   body.appendChild(note);
+
+  // --- Section Google Drive natif (sans installer Google Drive Desktop) ---
+  const gdriveSection = buildGdriveSection(gstatus);
+  body.appendChild(gdriveSection);
 
   dialog.appendChild(body);
 
@@ -2323,6 +2599,15 @@ function bindEvents() {
     elements.updateBanner.classList.add("hidden");
   });
   window.launcher.onUpdateStatus(handleUpdateStatus);
+
+  // Synchro Google Drive : si le demarrage a tire des donnees plus recentes,
+  // on recharge config + historique sans intervention de l'utilisateur.
+  window.launcher.onGdriveSynced((status, pulled) => {
+    if (pulled) {
+      reloadAfterGdrivePull();
+      flashStatus("Données récupérées depuis Google Drive.");
+    }
+  });
 
   let historySearchTimer = null;
   elements.historySearchInput.addEventListener("input", () => {
@@ -2745,6 +3030,12 @@ function handleUpdateStatus(payload) {
 // Notes de version affichees apres une mise a jour. La cle est le numero de
 // version, la valeur la liste des nouveautes a montrer.
 const CHANGELOG = {
+  "0.1.13": [
+    "Synchronisation Google Drive directe : connecte ton compte sans installer Google Drive Desktop.",
+    "Un seul clic « Autoriser » (connexion OAuth) ; l'app range ses données dans un dossier privé de ton Drive et ne voit rien d'autre.",
+    "Synchro automatique au démarrage et après chaque changement, + bouton « Synchroniser maintenant ».",
+    "Les identifiants des CLI ne sont toujours pas synchronisés."
+  ],
   "0.1.12": [
     "Relais entre IA : passe la main d'une CLI à une autre dans le même onglet, sans perdre le fil.",
     "La nouvelle IA reçoit le contexte en silencieux et poursuit comme si elle y était depuis le début.",
@@ -2890,6 +3181,10 @@ async function init() {
 
   if (elements.shellLabel && state.app.shellLabel) {
     elements.shellLabel.textContent = state.app.shellLabel;
+  }
+
+  if (elements.appVersionLabel && state.app.appVersion) {
+    elements.appVersionLabel.textContent = `v${state.app.appVersion}`;
   }
 
   const isWindows = state.app.isWindows ?? state.app.platform === "win32";

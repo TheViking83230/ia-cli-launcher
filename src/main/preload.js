@@ -9,6 +9,16 @@ contextBridge.exposeInMainWorld("launcher", {
   getSync: () => ipcRenderer.invoke("sync:get"),
   setSyncDir: (folder) => ipcRenderer.invoke("sync:set", folder),
   disableSync: () => ipcRenderer.invoke("sync:disable"),
+  gdriveStatus: () => ipcRenderer.invoke("gdrive:status"),
+  gdriveSetCredentials: (clientId, clientSecret) => ipcRenderer.invoke("gdrive:set-credentials", { clientId, clientSecret }),
+  gdriveConnect: () => ipcRenderer.invoke("gdrive:connect"),
+  gdriveDisconnect: () => ipcRenderer.invoke("gdrive:disconnect"),
+  gdriveSyncNow: () => ipcRenderer.invoke("gdrive:sync-now"),
+  onGdriveSynced: (handler) => {
+    const listener = (_event, status, pulled) => handler(status, pulled);
+    ipcRenderer.on("gdrive:synced", listener);
+    return () => ipcRenderer.off("gdrive:synced", listener);
+  },
   getAuthStatus: () => ipcRenderer.invoke("auth:get-status"),
   checkCommand: (command) => ipcRenderer.invoke("system:check-command", command),
   openUrl: (url) => ipcRenderer.invoke("system:open-url", url),
