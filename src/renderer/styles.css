@@ -538,6 +538,39 @@ select:focus {
   display: flex;
 }
 
+/* --- Vue partagee : deux panes cote a cote ------------------------------- */
+.terminal-host.split .terminal-pane.pane-left {
+  display: flex;
+  inset: 0 50% 0 0;
+  border-right: 2px solid var(--line);
+}
+
+.terminal-host.split .terminal-pane.pane-right {
+  display: flex;
+  inset: 0 0 0 50%;
+}
+
+/* Liseré discret sur le pane ayant le focus en vue partagee. */
+.terminal-host.split .terminal-pane.pane-focused::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  border: 1px solid color-mix(in srgb, var(--accent) 55%, transparent);
+}
+
+/* Repere gauche/droite sur les onglets affiches en vue partagee. */
+.tab.split-left .tab-dot,
+.tab.split-right .tab-dot {
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 70%, transparent);
+}
+
+/* Boutons de la barre d'outils en etat actif (toggle). */
+.icon-button.toggle-on {
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+  color: var(--accent);
+}
+
 .terminal-mount {
   flex: 1 1 auto;
   min-height: 0;

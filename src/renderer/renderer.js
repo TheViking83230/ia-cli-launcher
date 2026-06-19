@@ -4,7 +4,12 @@ const state = {
   sessions: new Map(),
   activeSessionId: null,
   authStatus: null,
-  app: null
+  app: null,
+  // Vue partagee : { leftId, rightId } quand deux onglets sont cote a cote,
+  // sinon null. activeSessionId = pane ayant le focus (l'un des deux).
+  split: null,
+  // Saisie synchronisee : ce qu'on tape est envoye aux DEUX panes du split.
+  mirrorInput: false
 };
 
 const elements = {
@@ -46,6 +51,8 @@ const elements = {
   historyButton: document.getElementById("historyButton"),
   shortcutsButton: document.getElementById("shortcutsButton"),
   syncButton: document.getElementById("syncButton"),
+  splitButton: document.getElementById("splitButton"),
+  mirrorButton: document.getElementById("mirrorButton"),
   historyModal: document.getElementById("historyModal"),
   historySearchInput: document.getElementById("historySearchInput"),
   historyClearButton: document.getElementById("historyClearButton"),
@@ -491,15 +498,61 @@ function createViewerTerminal() {
 }
 
 function setActiveSession(id) {
+  // En vue partagee, cliquer un onglet absent du split le charge dans le pane
+  // ayant le focus ; cliquer/focus un pane deja affiche deplace juste le focus.
+  if (state.split && id && id !== state.split.leftId && id !== state.split.rightId) {
+    if (state.activeSessionId === state.split.rightId) {
+      state.split.rightId = id;
+    } else {
+      state.split.leftId = id;
+    }
+  }
   state.activeSessionId = id;
+  layoutPanes();
+}
+
+// Applique l'agencement courant (simple ou partage) : classes CSS des panes et
+// des onglets, en-tete, etat des boutons, et ajustement des terminaux visibles.
+function layoutPanes() {
+  // La vue partagee n'est valide que si ses deux sessions existent encore.
+  if (state.split && !(state.sessions.has(state.split.leftId) && state.sessions.has(state.split.rightId))) {
+    state.split = null;
+    state.mirrorInput = false;
+  }
+  const split = state.split;
+  elements.terminalHost.classList.toggle("split", Boolean(split));
 
   for (const session of state.sessions.values()) {
-    session.tab.classList.toggle("active", session.id === id);
-    session.container.classList.toggle("active", session.id === id);
+    session.container.classList.remove("active", "pane-left", "pane-right", "pane-focused");
+    session.tab.classList.remove("active", "split-left", "split-right");
   }
 
-  const active = state.sessions.get(id);
-  elements.emptyState.classList.toggle("hidden", Boolean(active));
+  if (split) {
+    const left = state.sessions.get(split.leftId);
+    const right = state.sessions.get(split.rightId);
+    left.container.classList.add("pane-left");
+    right.container.classList.add("pane-right");
+    left.tab.classList.add("split-left");
+    right.tab.classList.add("split-right");
+    const focused = state.sessions.get(state.activeSessionId) || left;
+    focused.container.classList.add("pane-focused");
+    focused.tab.classList.add("active");
+  } else {
+    const active = state.sessions.get(state.activeSessionId);
+    if (active) {
+      active.container.classList.add("active");
+      active.tab.classList.add("active");
+    }
+  }
+
+  updateSessionHeader();
+  updateSplitControls();
+  fitVisible();
+}
+
+function updateSessionHeader() {
+  const active = state.sessions.get(state.activeSessionId);
+  elements.emptyState.classList.toggle("hidden", state.sessions.size > 0);
   elements.activeTitleInput.disabled = !active;
   elements.renameActiveTabButton.disabled = !active;
   if (elements.relaySelect) {
@@ -508,13 +561,85 @@ function setActiveSession(id) {
   }
   elements.activeTitleInput.value = active?.title || "Aucun onglet";
   elements.sessionMeta.textContent = active ? `${active.command} | ${active.cwd}` : "Pret";
+}
 
-  if (active) {
-    setTimeout(() => {
-      active.fitAddon.fit();
-      active.terminal.focus();
-    }, 25);
+// Ajuste la taille des terminaux actuellement visibles puis redonne le focus.
+function fitVisible() {
+  const ids = state.split ? [state.split.leftId, state.split.rightId] : [state.activeSessionId];
+  setTimeout(() => {
+    for (const id of ids) {
+      const s = state.sessions.get(id);
+      if (s) {
+        try {
+          s.fitAddon.fit();
+        } catch {}
+      }
+    }
+    state.sessions.get(state.activeSessionId)?.terminal.focus();
+  }, 30);
+}
+
+function updateSplitControls() {
+  const inSplit = Boolean(state.split);
+  if (elements.splitButton) {
+    elements.splitButton.classList.toggle("toggle-on", inSplit);
+    elements.splitButton.title = inSplit
+      ? "Fermer la vue partagée"
+      : "Vue partagée (deux onglets côte à côte)";
   }
+  if (elements.mirrorButton) {
+    elements.mirrorButton.disabled = !inSplit;
+    elements.mirrorButton.classList.toggle("toggle-on", state.mirrorInput && inSplit);
+    elements.mirrorButton.title = state.mirrorInput
+      ? "Saisie synchronisée : ACTIVE (on tape dans les deux panes)"
+      : "Saisie synchronisée (taper dans les deux panes à la fois)";
+  }
+}
+
+// En miroir, renvoie l'id de l'autre pane du split (pour dupliquer la saisie).
+function mirrorPartnerOf(id) {
+  if (!state.split) {
+    return null;
+  }
+  if (id === state.split.leftId) {
+    return state.split.rightId;
+  }
+  if (id === state.split.rightId) {
+    return state.split.leftId;
+  }
+  return null;
+}
+
+function toggleSplit() {
+  if (state.split) {
+    state.split = null;
+    state.mirrorInput = false;
+    layoutPanes();
+    flashStatus("Vue partagée fermée.");
+    return;
+  }
+  if (!state.activeSessionId || state.sessions.size < 2) {
+    flashStatus("Ouvre au moins deux onglets pour la vue partagée.");
+    return;
+  }
+  const partner = [...state.sessions.keys()].find((id) => id !== state.activeSessionId);
+  state.split = { leftId: state.activeSessionId, rightId: partner };
+  layoutPanes();
+  flashStatus("Vue partagée : clique un onglet pour changer le pane sélectionné · bouton 🔗 pour synchroniser la saisie.");
+}
+
+function toggleMirror() {
+  if (!state.split) {
+    flashStatus("Active d'abord la vue partagée pour synchroniser la saisie.");
+    return;
+  }
+  state.mirrorInput = !state.mirrorInput;
+  updateSplitControls();
+  flashStatus(
+    state.mirrorInput
+      ? "Saisie synchronisée activée : tu prompts les deux IA en même temps."
+      : "Saisie synchronisée désactivée."
+  );
 }
 
 function createTab(session) {
@@ -657,13 +782,22 @@ async function closeSession(id) {
     lastClosedSpec = { ...session.spec, title: session.title };
   }
 
+  // Si l'onglet ferme faisait partie de la vue partagee, on referme le split
+  // et on garde l'autre pane comme onglet courant.
+  let survivor = null;
+  if (state.split && (id === state.split.leftId || id === state.split.rightId)) {
+    survivor = id === state.split.leftId ? state.split.rightId : state.split.leftId;
+    state.split = null;
+    state.mirrorInput = false;
+  }
+
   await window.launcher.killTerminal(id);
   session.terminal.dispose();
   session.tab.remove();
   session.container.remove();
   state.sessions.delete(id);
 
-  const next = state.sessions.keys().next().value || null;
+  const next = (survivor && state.sessions.has(survivor) ? survivor : state.sessions.keys().next().value) || null;
   setActiveSession(next);
 }
 
@@ -722,9 +856,28 @@ async function openTerminalSession({ title, accent, starter, replayText, spec })
     terminal.write(replayText);
     terminal.write("\r\n\x1b[2m──────── reprise de session ────────\x1b[0m\r\n");
   }
-  terminal.onData((data) => window.launcher.writeTerminal(session.id, data));
+  terminal.onData((data) => {
+    window.launcher.writeTerminal(session.id, data);
+    // Saisie synchronisee : on duplique vers l'autre pane du split. onData ne se
+    // declenche que pour la frappe utilisateur (pas la sortie programme), donc
+    // ecrire dans l'autre pty ne provoque aucune boucle.
+    if (state.mirrorInput) {
+      const partner = mirrorPartnerOf(session.id);
+      if (partner) {
+        window.launcher.writeTerminal(partner, data);
+      }
+    }
+  });
   terminal.onResize(({ cols: nextCols, rows: nextRows }) => {
     window.launcher.resizeTerminal(session.id, nextCols, nextRows);
+  });
+
+  // En vue partagee, cliquer dans un terminal lui donne le focus (et donc le
+  // statut de pane actif, sans changer la disposition gauche/droite).
+  session.container.addEventListener("focusin", () => {
+    if (state.split && state.activeSessionId !== session.id) {
+      setActiveSession(session.id);
+    }
   });
 
   session.container.addEventListener("contextmenu", (event) => {
@@ -1497,6 +1650,8 @@ const SHORTCUT_ACTIONS = [
   { id: "duplicateTab", label: "Dupliquer l'onglet", category: "Onglets", run: () => state.activeSessionId && duplicateSession(state.activeSessionId) },
   { id: "relaunchTab", label: "Relancer l'onglet (nouvelle session)", category: "Onglets", run: () => state.activeSessionId && relaunchSession(state.activeSessionId) },
   { id: "renameTab", label: "Renommer l'onglet actif", category: "Onglets", run: () => focusRenameActive() },
+  { id: "toggleSplit", label: "Vue partagée (deux onglets côte à côte)", category: "Vue partagée", run: () => toggleSplit() },
+  { id: "toggleMirror", label: "Saisie synchronisée (miroir)", category: "Vue partagée", run: () => toggleMirror() },
   { id: "toggleSidebar", label: "Afficher / masquer le menu", category: "Navigation", run: () => setSidebarCollapsed(!elements.appShell.classList.contains("sidebar-collapsed")) },
   { id: "openHistory", label: "Ouvrir l'historique global", category: "Navigation", run: () => openHistory() },
   { id: "openShortcuts", label: "Réglages des raccourcis", category: "Navigation", run: () => openShortcutsModal() },
@@ -1516,6 +1671,8 @@ const DEFAULT_KEYBINDINGS = {
   duplicateTab: "Ctrl+Shift+D",
   relaunchTab: "Ctrl+Shift+R",
   renameTab: "F2",
+  toggleSplit: "Ctrl+\\",
+  toggleMirror: "Ctrl+Shift+M",
   toggleSidebar: "Ctrl+B",
   openHistory: "Ctrl+Shift+H",
   openShortcuts: "Ctrl+,",
@@ -2587,6 +2744,8 @@ function bindEvents() {
   elements.historyButton.addEventListener("click", openHistory);
   elements.shortcutsButton.addEventListener("click", openShortcutsModal);
   elements.syncButton.addEventListener("click", openSyncModal);
+  elements.splitButton.addEventListener("click", toggleSplit);
+  elements.mirrorButton.addEventListener("click", toggleMirror);
   elements.historyResumeButton.addEventListener("click", resumeFromHistory);
   setupShortcuts();
 
@@ -2645,9 +2804,14 @@ function bindEvents() {
   });
 
   window.addEventListener("resize", () => {
-    const active = state.sessions.get(state.activeSessionId);
-    if (active) {
-      active.fitAddon.fit();
+    const ids = state.split ? [state.split.leftId, state.split.rightId] : [state.activeSessionId];
+    for (const id of ids) {
+      const s = state.sessions.get(id);
+      if (s) {
+        try {
+          s.fitAddon.fit();
+        } catch {}
+      }
     }
     if (!elements.historyModal.classList.contains("hidden")) {
       fitViewerTerminal();
@@ -3030,6 +3194,12 @@ function handleUpdateStatus(payload) {
 // Notes de version affichees apres une mise a jour. La cle est le numero de
 // version, la valeur la liste des nouveautes a montrer.
 const CHANGELOG = {
+  "0.1.14": [
+    "Vue partagée : affiche deux onglets côte à côte (bouton ⧉ de la barre d'outils ou Ctrl+\\).",
+    "Clique un onglet pour le charger dans le pane sélectionné ; clique un terminal pour lui donner le focus.",
+    "Saisie synchronisée (bouton 🔗 ou Ctrl+Maj+M) : ce que tu tapes part dans les deux panes — un même prompt envoyé à deux IA en même temps.",
+    "Les deux terminaux s'ajustent automatiquement à la taille de la fenêtre."
+  ],
   "0.1.13": [
     "Synchronisation Google Drive directe : connecte ton compte sans installer Google Drive Desktop.",
     "Un seul clic « Autoriser » (connexion OAuth) ; l'app range ses données dans un dossier privé de ton Drive et ne voit rien d'autre.",
