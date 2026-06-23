@@ -936,6 +936,11 @@ select:focus {
 .changelog-body {
   padding: 14px 18px;
   overflow-y: auto;
+  /* Dans une boîte flex en colonne avec hauteur max, le corps doit être la zone
+     scrollable (sinon le contenu du bas — ex. les résultats du pipeline — est
+     coupé par overflow:hidden et devient inatteignable). */
+  flex: 1 1 auto;
+  min-height: 0;
 }
 
 .changelog-version + .changelog-version {
@@ -1590,6 +1595,331 @@ select:focus {
   cursor: pointer;
   padding: 0;
   text-decoration: underline;
+}
+
+/* --- Pipeline IA --------------------------------------------------------- */
+.pipeline-dialog {
+  max-width: 860px;
+  width: 94vw;
+  /* Hauteur fixe (et non simple max-height) : garantit que le corps flex a de
+     la place et que la zone Résultats reste visible/scrollable. */
+  height: min(90vh, 980px);
+  max-height: 90vh;
+}
+
+/* Pipeline montée dans un onglet (pane) plutôt qu'une modale. */
+.terminal-pane.pipeline-pane-host {
+  padding: 0;
+  gap: 0;
+}
+
+.pipeline-pane {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--panel);
+  overflow: hidden;
+}
+
+.pipeline-pane .changelog-header {
+  padding: 14px 18px 0;
+}
+
+.pipeline-pane .changelog-sub {
+  padding: 4px 18px 0;
+}
+
+.pipeline-pane .changelog-actions {
+  border-top: 1px solid var(--line);
+  padding: 12px 18px;
+}
+
+/* Onglet d'exécution : en-tête compact + grande zone de déroulé. */
+.pipeline-exec {
+  padding: 0;
+}
+
+.pipeline-exec-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--line);
+  flex: 0 0 auto;
+}
+
+.pipeline-exec-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.pipeline-exec-tools {
+  display: flex;
+  gap: 8px;
+}
+
+.pipeline-exec-results {
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: none;
+  padding: 14px 18px;
+}
+
+.pipeline-results {
+  min-height: 160px;
+}
+
+.pipeline-textarea {
+  width: 100%;
+  resize: vertical;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 13px;
+  font-family: inherit;
+  margin-bottom: 8px;
+}
+
+.pipeline-textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.pipeline-cwd-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 12px;
+}
+
+.pipeline-cwd-row .text-input {
+  flex: 1;
+}
+
+.pipeline-steps {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.pipeline-step {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 10px;
+  background: var(--panel-strong);
+}
+
+.pipeline-step-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.pipeline-step-num {
+  font-weight: 700;
+  font-size: 12px;
+  color: var(--accent);
+  white-space: nowrap;
+}
+
+.pipeline-cli {
+  flex: 1;
+}
+
+.pipeline-step-tools {
+  display: flex;
+  gap: 2px;
+}
+
+.icon-button.pipeline-mini {
+  width: 28px;
+  height: 28px;
+}
+
+.pipeline-cmd-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-family: "Cascadia Mono", Consolas, monospace;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.pipeline-cmd-prefix,
+.pipeline-cmd-suffix {
+  white-space: nowrap;
+}
+
+.pipeline-args {
+  flex: 1;
+  font-family: "Cascadia Mono", Consolas, monospace;
+  font-size: 12px;
+  height: 28px;
+}
+
+.pipeline-add {
+  margin-top: 10px;
+  align-self: flex-start;
+}
+
+.pipeline-mode {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.pipeline-results {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 12px;
+  max-height: 40vh;
+  overflow-y: auto;
+}
+
+.pipeline-result {
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--muted);
+  border-radius: 6px;
+  padding: 8px 10px;
+  background: var(--bg);
+}
+
+.pipeline-result.running {
+  border-left-color: var(--accent);
+}
+
+.pipeline-result.done {
+  border-left-color: #22c55e;
+}
+
+.pipeline-result.failed {
+  border-left-color: #ef4444;
+}
+
+.pipeline-result-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  margin-bottom: 6px;
+}
+
+.pipeline-result-cli {
+  font-weight: 600;
+  color: var(--text);
+}
+
+.pipeline-result-state {
+  margin-left: auto;
+  color: var(--muted);
+}
+
+.pipeline-result-prompt {
+  font-size: 11px;
+  color: var(--muted);
+  white-space: pre-wrap;
+  margin-bottom: 6px;
+  max-height: 60px;
+  overflow: hidden;
+}
+
+.pipeline-result-output {
+  margin: 0;
+  font-family: "Cascadia Mono", Consolas, monospace;
+  font-size: 12px;
+  color: var(--text);
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 220px;
+  overflow-y: auto;
+}
+
+.pipeline-stop {
+  color: #ef4444;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.pipeline-continue {
+  align-self: flex-start;
+}
+
+.pipeline-help {
+  margin: 4px 0 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel-strong);
+  font-size: 12.5px;
+}
+
+.pipeline-help summary {
+  cursor: pointer;
+  padding: 8px 12px;
+  font-weight: 600;
+  color: var(--text);
+  user-select: none;
+}
+
+.pipeline-help-body {
+  padding: 0 14px 10px;
+  color: var(--muted);
+  line-height: 1.55;
+}
+
+.pipeline-help-body p {
+  margin: 8px 0;
+}
+
+.pipeline-help-body ul,
+.pipeline-help-body ol {
+  margin: 6px 0;
+  padding-left: 20px;
+}
+
+.pipeline-help-body code {
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 1px 5px;
+  font-family: "Cascadia Mono", Consolas, monospace;
+  font-size: 11.5px;
+  color: var(--accent);
+}
+
+.pipeline-result-cmd {
+  font-family: "Cascadia Mono", Consolas, monospace;
+  font-size: 11px;
+  color: var(--muted);
+  margin-bottom: 4px;
+  word-break: break-all;
+}
+
+.pipeline-results-heading {
+  text-align: center;
+  font-weight: 700;
+  color: var(--accent);
+  margin: 4px 0;
+  letter-spacing: 0.5px;
+}
+
+.pipeline-result.running {
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 40%, transparent);
+}
+
+.pipeline-result.running .pipeline-result-state {
+  color: var(--accent);
+  font-weight: 600;
 }
 
 /* --- Tuto identifiant Google Drive --------------------------------------- */

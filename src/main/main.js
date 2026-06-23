@@ -7,6 +7,7 @@ const { autoUpdater } = require("electron-updater");
 const { defaultProfiles, defaultPersonas } = require("./defaultProfiles");
 const platform = require("./platform");
 const gdrive = require("./gdrive");
+const pipeline = require("./pipeline");
 
 // Sous Linux, certaines distributions recentes (Ubuntu 24.04+) bloquent les
 // "user namespaces" non privilegies : le sandbox Chromium ne peut alors pas
@@ -592,9 +593,10 @@ function normalizeConfig(config) {
       ...defaultProfile,
       ...incoming,
       modes: [...defaultModes, ...customModes],
-      // Mecanisme interne (non editable par l'utilisateur) : toujours pris des
+      // Mecanismes internes (non editables par l'utilisateur) : toujours pris des
       // valeurs par defaut pour que les mises a jour de methode s'appliquent.
-      personaInjection: defaultProfile.personaInjection
+      personaInjection: defaultProfile.personaInjection,
+      headless: defaultProfile.headless
     };
   });
 
@@ -1050,6 +1052,27 @@ app.whenReady().then(() => {
     const result = await gdrive.syncOnce(getDataDir());
     return { ...result, status: gdrive.getStatus() };
   });
+
+  // Pipeline IA : execute une etape en mode non-interactif et renvoie sa sortie.
+  // La sortie est aussi diffusee en direct (streaming) au renderer.
+  ipcMain.handle("pipeline:run-step", (event, request) => {
+    const runId = request?.runId;
+    return pipeline.runHeadlessStep({
+      command: request?.command,
+      args: Array.isArray(request?.args) ? request.args : [],
+      prompt: request?.prompt || "",
+      cwd: request?.cwd || "",
+      stdin: Boolean(request?.stdin),
+      timeoutMs: Number(request?.timeoutMs) || 1800000,
+      onChunk: (chunk) => {
+        if (runId && !event.sender.isDestroyed()) {
+          event.sender.send("pipeline:step-output", { runId, chunk });
+        }
+      }
+    });
+  });
+
+  ipcMain.handle("pipeline:cancel", () => pipeline.cancel());
 
   ipcMain.handle("system:open-url", (_event, url) => {
     const target = String(url || "").trim();

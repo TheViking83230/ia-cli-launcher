@@ -14,6 +14,13 @@ contextBridge.exposeInMainWorld("launcher", {
   gdriveConnect: () => ipcRenderer.invoke("gdrive:connect"),
   gdriveDisconnect: () => ipcRenderer.invoke("gdrive:disconnect"),
   gdriveSyncNow: () => ipcRenderer.invoke("gdrive:sync-now"),
+  runPipelineStep: (request) => ipcRenderer.invoke("pipeline:run-step", request),
+  cancelPipeline: () => ipcRenderer.invoke("pipeline:cancel"),
+  onPipelineStepOutput: (handler) => {
+    const listener = (_event, payload) => handler(payload);
+    ipcRenderer.on("pipeline:step-output", listener);
+    return () => ipcRenderer.off("pipeline:step-output", listener);
+  },
   onGdriveSynced: (handler) => {
     const listener = (_event, status, pulled) => handler(status, pulled);
     ipcRenderer.on("gdrive:synced", listener);

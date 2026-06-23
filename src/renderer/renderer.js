@@ -53,6 +53,7 @@ const elements = {
   syncButton: document.getElementById("syncButton"),
   splitButton: document.getElementById("splitButton"),
   mirrorButton: document.getElementById("mirrorButton"),
+  pipelineButton: document.getElementById("pipelineButton"),
   historyModal: document.getElementById("historyModal"),
   historySearchInput: document.getElementById("historySearchInput"),
   historyClearButton: document.getElementById("historyClearButton"),
@@ -552,15 +553,19 @@ function layoutPanes() {
 
 function updateSessionHeader() {
   const active = state.sessions.get(state.activeSessionId);
+  const isPipeline = active?.type === "pipeline";
   elements.emptyState.classList.toggle("hidden", state.sessions.size > 0);
   elements.activeTitleInput.disabled = !active;
   elements.renameActiveTabButton.disabled = !active;
   if (elements.relaySelect) {
-    elements.relaySelect.disabled = !active;
+    // Le relais ne s'applique qu'aux onglets terminaux.
+    elements.relaySelect.disabled = !active || isPipeline;
     elements.relaySelect.value = "";
   }
   elements.activeTitleInput.value = active?.title || "Aucun onglet";
-  elements.sessionMeta.textContent = active ? `${active.command} | ${active.cwd}` : "Pret";
+  elements.sessionMeta.textContent = active
+    ? isPipeline ? "Pipeline IA" : `${active.command} | ${active.cwd}`
+    : "Pret";
 }
 
 // Ajuste la taille des terminaux actuellement visibles puis redonne le focus.
@@ -575,7 +580,7 @@ function fitVisible() {
         } catch {}
       }
     }
-    state.sessions.get(state.activeSessionId)?.terminal.focus();
+    state.sessions.get(state.activeSessionId)?.terminal?.focus();
   }, 30);
 }
 
@@ -791,8 +796,10 @@ async function closeSession(id) {
     state.mirrorInput = false;
   }
 
-  await window.launcher.killTerminal(id);
-  session.terminal.dispose();
+  if (session.type === "terminal") {
+    await window.launcher.killTerminal(id);
+    session.terminal.dispose();
+  }
   session.tab.remove();
   session.container.remove();
   state.sessions.delete(id);
@@ -835,6 +842,7 @@ async function openTerminalSession({ title, accent, starter, replayText, spec })
 
   const session = {
     id: startResult.id,
+    type: "terminal",
     title,
     command: startResult.command,
     cwd: startResult.cwd,
@@ -1652,6 +1660,7 @@ const SHORTCUT_ACTIONS = [
   { id: "renameTab", label: "Renommer l'onglet actif", category: "Onglets", run: () => focusRenameActive() },
   { id: "toggleSplit", label: "Vue partagée (deux onglets côte à côte)", category: "Vue partagée", run: () => toggleSplit() },
   { id: "toggleMirror", label: "Saisie synchronisée (miroir)", category: "Vue partagée", run: () => toggleMirror() },
+  { id: "openPipeline", label: "Pipeline IA (enchaîner des IA)", category: "Vue partagée", run: () => openPipelineTab() },
   { id: "toggleSidebar", label: "Afficher / masquer le menu", category: "Navigation", run: () => setSidebarCollapsed(!elements.appShell.classList.contains("sidebar-collapsed")) },
   { id: "openHistory", label: "Ouvrir l'historique global", category: "Navigation", run: () => openHistory() },
   { id: "openShortcuts", label: "Réglages des raccourcis", category: "Navigation", run: () => openShortcutsModal() },
@@ -1673,6 +1682,7 @@ const DEFAULT_KEYBINDINGS = {
   renameTab: "F2",
   toggleSplit: "Ctrl+\\",
   toggleMirror: "Ctrl+Shift+M",
+  openPipeline: "Ctrl+Shift+P",
   toggleSidebar: "Ctrl+B",
   openHistory: "Ctrl+Shift+H",
   openShortcuts: "Ctrl+,",
@@ -2292,6 +2302,590 @@ function openPersonasModal() {
 }
 
 // --- Synchronisation des donnees (dossier cloud) ---------------------------
+// ===================== Pipeline IA (enchaînement de CLI) =====================
+
+const PIPELINE_KEY = "pipeline.v1";
+
+// Modèle = dernière config utilisée (point de départ des nouvelles pipelines).
+// Chaque onglet pipeline a ENSUITE sa propre copie indépendante (session.pipeline).
+function clonePipelineDef(pdef) {
+  return {
+    cwd: pdef?.cwd || "",
+    autoMode: pdef?.autoMode !== false,
+    steps: (pdef?.steps || []).map((s) => ({ profileId: s.profileId, prompt: s.prompt, args: s.args ?? null }))
+  };
+}
+
+function loadPipelineTemplate() {
+  try {
+    const s = JSON.parse(window.localStorage.getItem(PIPELINE_KEY) || "null");
+    if (s && Array.isArray(s.steps) && s.steps.length) {
+      return clonePipelineDef(s);
+    }
+  } catch {}
+  return null;
+}
+
+function savePipelineTemplate(pdef) {
+  try {
+    window.localStorage.setItem(PIPELINE_KEY, JSON.stringify(clonePipelineDef(pdef)));
+  } catch {}
+}
+
+function newPipelineDef() {
+  return loadPipelineTemplate() || { cwd: "", autoMode: true, steps: [{ profileId: defaultStepProfileId(), prompt: "", args: null }] };
+}
+
+function pipelineProfiles() {
+  return state.config?.profiles || [];
+}
+
+function defaultStepProfileId() {
+  const profiles = pipelineProfiles();
+  return (profiles.find((p) => p.favorite) || profiles[0])?.id || "";
+}
+
+// Remplace {{entrée}}, {{précédent}} et {{étapeN}} par les valeurs du contexte.
+function substituteVars(template, ctx) {
+  const map = {
+    "entrée": ctx.input, "entree": ctx.input, "input": ctx.input,
+    "précédent": ctx.prev, "precedent": ctx.prev, "prev": ctx.prev, "sortie": ctx.prev
+  };
+  return String(template || "").replace(/\{\{\s*([^}]+?)\s*\}\}/g, (whole, key) => {
+    const k = String(key).toLowerCase().trim();
+    if (k in map) {
+      return map[k] ?? "";
+    }
+    const stepMatch = k.match(/^(?:étape|etape|step)\s*(\d+)$/);
+    if (stepMatch) {
+      return ctx.outputs[parseInt(stepMatch[1], 10) - 1] ?? "";
+    }
+    return whole;
+  });
+}
+
+// Decoupe une chaine de flags en respectant les guillemets.
+function splitFlagString(value) {
+  const out = [];
+  const re = /"([^"]*)"|'([^']*)'|(\S+)/g;
+  let m;
+  while ((m = re.exec(String(value || ""))) !== null) {
+    out.push(m[1] ?? m[2] ?? m[3]);
+  }
+  return out;
+}
+
+// Arguments headless effectifs d'une etape : override utilisateur sinon defaut CLI.
+function stepArgs(step, profile) {
+  if (step.args != null && String(step.args).trim() !== "") {
+    return splitFlagString(step.args);
+  }
+  return profile?.headless?.args || [];
+}
+
+function defaultArgsString(profile) {
+  return (profile?.headless?.args || []).join(" ");
+}
+
+// Rendu de la liste d'étapes (éditeur) pour une définition de pipeline donnée.
+function renderPipelineSteps(stepsEl, pdef) {
+  stepsEl.innerHTML = "";
+  pdef.steps.forEach((step, index) => {
+    const profile = pipelineProfiles().find((p) => p.id === step.profileId);
+
+    const card = document.createElement("div");
+    card.className = "pipeline-step";
+
+    const head = document.createElement("div");
+    head.className = "pipeline-step-head";
+    const num = document.createElement("span");
+    num.className = "pipeline-step-num";
+    num.textContent = `Étape ${index + 1}`;
+
+    const cliSelect = document.createElement("select");
+    cliSelect.className = "relay-select pipeline-cli";
+    for (const p of pipelineProfiles()) {
+      const opt = document.createElement("option");
+      opt.value = p.id;
+      opt.textContent = p.label;
+      if (p.id === step.profileId) {
+        opt.selected = true;
+      }
+      cliSelect.appendChild(opt);
+    }
+    cliSelect.addEventListener("change", () => {
+      step.profileId = cliSelect.value;
+      step.args = null;
+      savePipelineTemplate(pdef);
+      renderPipelineSteps(stepsEl, pdef);
+      createIcons();
+    });
+
+    const tools = document.createElement("div");
+    tools.className = "pipeline-step-tools";
+    const move = (delta) => {
+      const target = index + delta;
+      if (target < 0 || target >= pdef.steps.length) {
+        return;
+      }
+      const [m] = pdef.steps.splice(index, 1);
+      pdef.steps.splice(target, 0, m);
+      savePipelineTemplate(pdef);
+      renderPipelineSteps(stepsEl, pdef);
+      createIcons();
+    };
+    const delBtn = mkIconBtn("trash-2", "Supprimer", () => {
+      pdef.steps.splice(index, 1);
+      if (!pdef.steps.length) {
+        pdef.steps.push({ profileId: defaultStepProfileId(), prompt: "", args: null });
+      }
+      savePipelineTemplate(pdef);
+      renderPipelineSteps(stepsEl, pdef);
+      createIcons();
+    });
+    tools.append(mkIconBtn("chevron-up", "Monter", () => move(-1)), mkIconBtn("chevron-down", "Descendre", () => move(1)), delBtn);
+
+    head.append(num, cliSelect, tools);
+    card.appendChild(head);
+
+    const promptArea = document.createElement("textarea");
+    promptArea.className = "pipeline-textarea";
+    promptArea.rows = 4;
+    promptArea.placeholder = index === 0
+      ? "Prompt de départ pour cette IA…"
+      : "Prompt — utilise {{précédent}} pour la sortie de l'étape d'avant";
+    promptArea.value = step.prompt || "";
+    promptArea.addEventListener("input", () => {
+      step.prompt = promptArea.value;
+      savePipelineTemplate(pdef);
+    });
+    card.appendChild(promptArea);
+
+    // Commande headless (visible + editable).
+    const cmdRow = document.createElement("div");
+    cmdRow.className = "pipeline-cmd-row";
+    const cmdPrefix = document.createElement("span");
+    cmdPrefix.className = "pipeline-cmd-prefix";
+    cmdPrefix.textContent = `${profile?.command || "?"} `;
+    const argsInput = document.createElement("input");
+    argsInput.type = "text";
+    argsInput.className = "text-input pipeline-args";
+    argsInput.placeholder = defaultArgsString(profile) || "(aucun flag)";
+    argsInput.value = step.args != null ? step.args : "";
+    argsInput.title = "Flags du mode non-interactif (vide = défaut de la CLI). Le prompt est ajouté en dernier.";
+    argsInput.addEventListener("input", () => {
+      step.args = argsInput.value.trim() === "" ? null : argsInput.value;
+      savePipelineTemplate(pdef);
+    });
+    const cmdSuffix = document.createElement("span");
+    cmdSuffix.className = "pipeline-cmd-suffix";
+    cmdSuffix.textContent = ' "«prompt»"';
+    cmdRow.append(cmdPrefix, argsInput, cmdSuffix);
+    card.appendChild(cmdRow);
+
+    stepsEl.appendChild(card);
+  });
+}
+
+// Menu de configuration d'UNE pipeline (liée à son onglet d'exécution).
+function openPipelineConfig(session) {
+  const pdef = session.pipeline;
+  for (const step of pdef.steps) {
+    if (!step.profileId || !pipelineProfiles().some((p) => p.id === step.profileId)) {
+      step.profileId = defaultStepProfileId();
+    }
+  }
+
+  const overlay = document.createElement("div");
+  overlay.className = "changelog-modal";
+  const dialog = document.createElement("div");
+  dialog.className = "changelog-dialog shortcuts-dialog pipeline-dialog";
+
+  const header = document.createElement("div");
+  header.className = "changelog-header";
+  header.innerHTML = `<i data-lucide="workflow"></i><span>${session.title} — configuration</span>`;
+  dialog.appendChild(header);
+
+  const sub = document.createElement("div");
+  sub.className = "changelog-sub";
+  sub.textContent = "Enchaîne plusieurs IA : la réponse d'une étape devient l'entrée de la suivante.";
+  dialog.appendChild(sub);
+
+  const body = document.createElement("div");
+  body.className = "changelog-body shortcuts-body";
+
+  // Bloc d'aide détaillé (ouvert par défaut).
+  const help = document.createElement("details");
+  help.className = "pipeline-help";
+  help.open = true;
+  help.innerHTML = `
+    <summary>❔ Comment ça marche ?</summary>
+    <div class="pipeline-help-body">
+      <p>Une <b>pipeline</b> exécute tes étapes l'une après l'autre. La réponse d'une étape peut être réinjectée dans la suivante — parfait pour « une IA analyse, une autre corrige ».</p>
+      <p><b>Variables</b> à écrire dans le prompt d'une étape :</p>
+      <ul>
+        <li><code>{{précédent}}</code> → la réponse de l'étape juste avant.</li>
+        <li><code>{{étape1}}</code>, <code>{{étape2}}</code>… → la réponse d'une étape précise.</li>
+      </ul>
+      <p><b>Exemple en 2 étapes :</b></p>
+      <ol>
+        <li><b>Codex</b> — <code>Analyse ce projet et liste tous les bugs, sans corriger.</code></li>
+        <li><b>Claude</b> — <code>Corrige ces bugs un par un : {{précédent}}</code></li>
+      </ol>
+      <p><b>Bon à savoir :</b></p>
+      <ul>
+        <li>Chaque IA doit être <b>installée et connectée</b> (teste-la d'abord dans un onglet normal).</li>
+        <li><b>Auto</b> = tout s'enchaîne tout seul ; décoché = <b>pas-à-pas</b> (tu valides chaque passage).</li>
+        <li>Le petit champ à côté du nom de la CLI = <b>options de la commande</b> (laisse vide = réglage par défaut). <b>Le prompt ne va pas là</b>, mais dans la grande zone de texte.</li>
+        <li><b>Dossier de travail</b> = là où les IA agissent (par défaut : le dossier sélectionné dans le menu de gauche).</li>
+        <li>Après « Lancer », le déroulé s'affiche <b>en direct</b> dans l'onglet ; une grosse tâche peut prendre plusieurs minutes (bouton ⏹ pour annuler).</li>
+      </ul>
+    </div>`;
+  body.appendChild(help);
+
+  // Dossier de travail (cwd).
+  const cwdRow = document.createElement("div");
+  cwdRow.className = "pipeline-cwd-row";
+  const cwdInput = document.createElement("input");
+  cwdInput.type = "text";
+  cwdInput.className = "text-input";
+  cwdInput.placeholder = "Dossier de travail (par défaut : dossier sélectionné)";
+  cwdInput.value = pdef.cwd || state.selectedFolder || "";
+  cwdInput.addEventListener("input", () => {
+    pdef.cwd = cwdInput.value;
+    savePipelineTemplate(pdef);
+  });
+  const cwdBtn = document.createElement("button");
+  cwdBtn.type = "button";
+  cwdBtn.className = "ghost-button";
+  cwdBtn.textContent = "Choisir…";
+  cwdBtn.addEventListener("click", async () => {
+    const folder = await window.launcher.chooseFolder();
+    if (folder) {
+      cwdInput.value = folder;
+      pdef.cwd = folder;
+      savePipelineTemplate(pdef);
+    }
+  });
+  cwdRow.append(cwdInput, cwdBtn);
+  body.appendChild(cwdRow);
+
+  const stepsEl = document.createElement("div");
+  stepsEl.className = "pipeline-steps";
+  body.appendChild(stepsEl);
+
+  const addBtn = document.createElement("button");
+  addBtn.type = "button";
+  addBtn.className = "ghost-button pipeline-add";
+  addBtn.innerHTML = '<i data-lucide="plus"></i> Ajouter une étape';
+  addBtn.addEventListener("click", () => {
+    pdef.steps.push({ profileId: defaultStepProfileId(), prompt: "{{précédent}}", args: null });
+    savePipelineTemplate(pdef);
+    renderPipelineSteps(stepsEl, pdef);
+    createIcons();
+  });
+  body.appendChild(addBtn);
+  dialog.appendChild(body);
+
+  // Actions.
+  const actions = document.createElement("div");
+  actions.className = "changelog-actions shortcuts-actions";
+  const left = document.createElement("label");
+  left.className = "pipeline-mode";
+  const modeCheck = document.createElement("input");
+  modeCheck.type = "checkbox";
+  modeCheck.checked = pdef.autoMode !== false;
+  modeCheck.addEventListener("change", () => {
+    pdef.autoMode = modeCheck.checked;
+    savePipelineTemplate(pdef);
+  });
+  const modeText = document.createElement("span");
+  modeText.textContent = "Enchaînement automatique (sinon pas-à-pas)";
+  left.append(modeCheck, modeText);
+
+  const right = document.createElement("div");
+  right.style.display = "flex";
+  right.style.gap = "8px";
+  const launchBtn = document.createElement("button");
+  launchBtn.type = "button";
+  launchBtn.className = "primary-button";
+  launchBtn.innerHTML = '<i data-lucide="play"></i> Lancer le pipeline';
+  launchBtn.addEventListener("click", () => {
+    overlay.remove();
+    setActiveSession(session.id);
+    runPipeline(session);
+  });
+  const closeBtn = document.createElement("button");
+  closeBtn.type = "button";
+  closeBtn.className = "ghost-button";
+  closeBtn.textContent = "Fermer";
+  closeBtn.addEventListener("click", () => overlay.remove());
+  right.append(launchBtn, closeBtn);
+  actions.append(left, right);
+  dialog.appendChild(actions);
+
+  overlay.appendChild(dialog);
+  overlay.addEventListener("click", (event) => {
+    if (event.target === overlay) {
+      overlay.remove();
+    }
+  });
+  document.body.appendChild(overlay);
+  renderPipelineSteps(stepsEl, pdef);
+  createIcons();
+}
+
+// Crée TOUJOURS un nouvel onglet d'exécution (pipeline indépendante).
+function createPipelineExecTab(pdef) {
+  const sessionId = "pipeline-" + Date.now() + "-" + Math.floor(Math.random() * 1000);
+  const container = document.createElement("div");
+  container.className = "terminal-pane pipeline-pane-host";
+  container.dataset.sessionId = sessionId;
+  const pane = document.createElement("div");
+  pane.className = "pipeline-pane pipeline-exec";
+  container.appendChild(pane);
+  elements.terminalHost.appendChild(container);
+
+  const count = [...state.sessions.values()].filter((s) => s.type === "pipeline").length + 1;
+  const session = { id: sessionId, type: "pipeline", title: "Pipeline " + count, accent: "#a855f7", tab: null, container, pipeline: pdef };
+  session.tab = createTab(session);
+  state.sessions.set(sessionId, session);
+
+  const head = document.createElement("div");
+  head.className = "pipeline-exec-head";
+  const title = document.createElement("span");
+  title.className = "pipeline-exec-title";
+  title.innerHTML = '<i data-lucide="workflow"></i> ' + session.title;
+
+  const headTools = document.createElement("div");
+  headTools.className = "pipeline-exec-tools";
+  const cancelBtn = document.createElement("button");
+  cancelBtn.type = "button";
+  cancelBtn.className = "ghost-button danger";
+  cancelBtn.textContent = "⏹ Annuler";
+  cancelBtn.style.display = "none";
+  cancelBtn.addEventListener("click", () => {
+    window.launcher.cancelPipeline();
+    flashStatus("Annulation du pipeline…");
+  });
+  const editBtn = document.createElement("button");
+  editBtn.type = "button";
+  editBtn.className = "ghost-button";
+  editBtn.innerHTML = '<i data-lucide="settings-2"></i> Modifier';
+  editBtn.addEventListener("click", () => openPipelineConfig(session));
+  const relaunchBtn = document.createElement("button");
+  relaunchBtn.type = "button";
+  relaunchBtn.className = "primary-button";
+  relaunchBtn.innerHTML = '<i data-lucide="play"></i> Relancer';
+  relaunchBtn.addEventListener("click", () => runPipeline(session));
+  headTools.append(cancelBtn, editBtn, relaunchBtn);
+  head.append(title, headTools);
+  pane.appendChild(head);
+
+  const results = document.createElement("div");
+  results.className = "pipeline-results pipeline-exec-results";
+  pane.appendChild(results);
+
+  session.results = results;
+  session.relaunchBtn = relaunchBtn;
+  session.cancelBtn = cancelBtn;
+  setActiveSession(sessionId);
+  createIcons();
+  return session;
+}
+
+// Bouton barre d'outils / raccourci : NOUVELLE pipeline (onglet séparé) + config.
+function openPipelineTab() {
+  const session = createPipelineExecTab(newPipelineDef());
+  openPipelineConfig(session);
+}
+
+function mkIconBtn(icon, title, onClick) {
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "icon-button pipeline-mini";
+  btn.title = title;
+  btn.innerHTML = `<i data-lucide="${icon}"></i>`;
+  btn.addEventListener("click", onClick);
+  return btn;
+}
+
+async function runPipeline(session) {
+  const pdef = session.pipeline;
+  const resultsEl = session.results;
+  const runBtn = session.relaunchBtn;
+  const cancelBtn = session.cancelBtn;
+  savePipelineTemplate(pdef);
+  resultsEl.innerHTML = "";
+  runBtn.disabled = true;
+
+  const heading = document.createElement("div");
+  heading.className = "pipeline-results-heading";
+  heading.textContent = "── Résultats (en direct) ──";
+  resultsEl.appendChild(heading);
+  heading.scrollIntoView({ block: "start", behavior: "smooth" });
+
+  const ctx = { input: "", prev: "", outputs: [] };
+  const cwd = pdef.cwd || state.selectedFolder || "";
+  const steps = pdef.steps;
+
+  if (!steps.length) {
+    const msg = document.createElement("div");
+    msg.className = "pipeline-stop";
+    msg.textContent = "Aucune étape. Ajoute au moins une étape.";
+    resultsEl.appendChild(msg);
+    runBtn.disabled = false;
+    return;
+  }
+
+  const runLabel = runBtn.innerHTML;
+  runBtn.innerHTML = "⏳ En cours…";
+  if (cancelBtn) {
+    cancelBtn.style.display = "";
+  }
+
+  try {
+    for (let i = 0; i < steps.length; i++) {
+      const step = steps[i];
+      const profile = pipelineProfiles().find((p) => p.id === step.profileId);
+      const block = renderResultBlock(resultsEl, i, profile);
+      if (!profile) {
+        updateResultBlock(block, { ok: false, error: "CLI introuvable." });
+        break;
+      }
+      const prompt = substituteVars(step.prompt, ctx);
+      const args = stepArgs(step, profile);
+      block.cmd.textContent = `$ ${profile.command} ${args.join(" ")} "…"`.replace(/\s+/g, " ");
+      block.preview.textContent = prompt.length > 400 ? prompt.slice(0, 400) + "…" : prompt;
+
+      if (!prompt.trim()) {
+        updateResultBlock(block, { ok: false, error: "Prompt vide : écris un prompt dans cette étape (ou utilise {{précédent}})." });
+        const stop = document.createElement("div");
+        stop.className = "pipeline-stop";
+        stop.textContent = "⛔ Pipeline arrêté (prompt vide).";
+        resultsEl.appendChild(stop);
+        break;
+      }
+
+      // Sortie en direct + indicateur d'activité (chrono + octets reçus), car
+      // certaines CLI (ex. codex exec) ne crachent leur sortie qu'à la fin.
+      let res;
+      const runId = `step-${Date.now()}-${i}`;
+      const startedAt = Date.now();
+      let received = 0;
+      block.output.textContent = "";
+      const tick = () => {
+        const s = Math.floor((Date.now() - startedAt) / 1000);
+        const mm = Math.floor(s / 60);
+        const ss = String(s % 60).padStart(2, "0");
+        block.stateEl.textContent = `▶ en cours… ${mm}:${ss} · ${received} caractères reçus`;
+      };
+      tick();
+      const heartbeat = window.setInterval(tick, 1000);
+      const unsub = window.launcher.onPipelineStepOutput((payload) => {
+        if (payload.runId === runId) {
+          received += payload.chunk.length;
+          block.output.textContent += payload.chunk;
+          block.output.scrollTop = block.output.scrollHeight;
+          tick();
+        }
+      });
+      try {
+        res = await window.launcher.runPipelineStep({
+          command: profile.command,
+          args,
+          prompt,
+          cwd,
+          stdin: Boolean(profile.headless?.stdin),
+          runId
+        });
+      } catch (error) {
+        res = { ok: false, error: String(error?.message || error) };
+      } finally {
+        window.clearInterval(heartbeat);
+        if (unsub) {
+          unsub();
+        }
+      }
+      updateResultBlock(block, res);
+
+      if (res.ok) {
+        ctx.prev = res.output || "";
+        ctx.outputs.push(ctx.prev);
+        flashStatus(`Pipeline : étape ${i + 1} OK (${ctx.prev.length} caractères).`);
+      } else {
+        ctx.outputs.push("");
+        const stop = document.createElement("div");
+        stop.className = "pipeline-stop";
+        stop.textContent = "⛔ Étape en échec — pipeline arrêté. (détail dans le bloc rouge ci-dessus)";
+        resultsEl.appendChild(stop);
+        block.block.scrollIntoView({ block: "center" });
+        flashStatus(`Pipeline : étape ${i + 1} en échec — ${(res.error || "").split("\n")[0].slice(0, 120)}`);
+        break;
+      }
+
+      if (!pdef.autoMode && i < steps.length - 1) {
+        await waitForContinue(resultsEl, `Continuer → étape ${i + 2}`);
+      }
+    }
+  } finally {
+    runBtn.disabled = false;
+    runBtn.innerHTML = runLabel;
+    if (cancelBtn) {
+      cancelBtn.style.display = "none";
+    }
+  }
+}
+
+function renderResultBlock(resultsEl, index, profile) {
+  const block = document.createElement("div");
+  block.className = "pipeline-result running";
+  const head = document.createElement("div");
+  head.className = "pipeline-result-head";
+  head.innerHTML = `<span class="pipeline-step-num">Étape ${index + 1}</span><span class="pipeline-result-cli">${profile?.label || "?"}</span><span class="pipeline-result-state">en cours…</span>`;
+  const cmd = document.createElement("div");
+  cmd.className = "pipeline-result-cmd";
+  const preview = document.createElement("div");
+  preview.className = "pipeline-result-prompt";
+  const output = document.createElement("pre");
+  output.className = "pipeline-result-output";
+  block.append(head, cmd, preview, output);
+  resultsEl.appendChild(block);
+  resultsEl.scrollTop = resultsEl.scrollHeight;
+  // Amène le bloc en cours à l'écran (sinon il reste en bas, hors de vue).
+  block.scrollIntoView({ block: "center", behavior: "smooth" });
+  return { block, head, cmd, preview, output, stateEl: head.querySelector(".pipeline-result-state") };
+}
+
+function updateResultBlock(block, res) {
+  block.block.classList.remove("running");
+  if (res.ok) {
+    block.block.classList.add("done");
+    block.stateEl.textContent = "✓ terminé";
+    block.output.textContent = res.output || "(sortie vide)";
+  } else {
+    block.block.classList.add("failed");
+    block.stateEl.textContent = "✗ échec";
+    block.output.textContent = res.error || res.output || "(erreur inconnue)";
+  }
+  block.block.scrollIntoView({ block: "nearest" });
+}
+
+function waitForContinue(container, label) {
+  return new Promise((resolve) => {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "primary-button pipeline-continue";
+    btn.textContent = label;
+    btn.addEventListener("click", () => {
+      btn.remove();
+      resolve();
+    });
+    container.appendChild(btn);
+    btn.scrollIntoView({ block: "nearest" });
+  });
+}
+
 function formatLastSync(ts) {
   if (!ts) {
     return "jamais";
@@ -2746,6 +3340,7 @@ function bindEvents() {
   elements.syncButton.addEventListener("click", openSyncModal);
   elements.splitButton.addEventListener("click", toggleSplit);
   elements.mirrorButton.addEventListener("click", toggleMirror);
+  elements.pipelineButton.addEventListener("click", openPipelineTab);
   elements.historyResumeButton.addEventListener("click", resumeFromHistory);
   setupShortcuts();
 
@@ -3198,7 +3793,9 @@ const CHANGELOG = {
     "Vue partagée : affiche deux onglets côte à côte (bouton ⧉ de la barre d'outils ou Ctrl+\\).",
     "Clique un onglet pour le charger dans le pane sélectionné ; clique un terminal pour lui donner le focus.",
     "Saisie synchronisée (bouton 🔗 ou Ctrl+Maj+M) : ce que tu tapes part dans les deux panes — un même prompt envoyé à deux IA en même temps.",
-    "Les deux terminaux s'ajustent automatiquement à la taille de la fenêtre."
+    "Les deux terminaux s'ajustent automatiquement à la taille de la fenêtre.",
+    "Pipeline IA : enchaîne plusieurs IA, la sortie de l'une alimente l'entrée de la suivante ({{entrée}}, {{précédent}}). Mode automatique ou pas-à-pas (bouton ⟿ ou Ctrl+Maj+P).",
+    "Antigravity (Google) ajouté en remplacement de Gemini CLI (commande agy) ; Gemini conservé en « ancien »."
   ],
   "0.1.13": [
     "Synchronisation Google Drive directe : connecte ton compte sans installer Google Drive Desktop.",

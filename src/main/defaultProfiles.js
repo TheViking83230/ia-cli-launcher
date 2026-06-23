@@ -122,8 +122,42 @@ const defaultProfiles = [
     ]
   },
   {
+    // Antigravity CLI (Google) remplace Gemini CLI depuis juin 2026 :
+    // commande "agy", binaire Go, prompt one-shot en mode non-interactif.
+    id: "antigravity",
+    label: "Antigravity (Google)",
+    command: "agy",
+    accent: "#4285f4",
+    favorite: true,
+    docsUrl: "https://antigravity.google",
+    installCommand: pick(
+      "powershell -NoProfile -ExecutionPolicy Bypass -Command \"irm https://antigravity.google/cli/install.ps1 | iex\"",
+      "curl -fsSL https://antigravity.google/cli/install.sh | bash"
+    ),
+    authChecks: {
+      env: ["GEMINI_API_KEY", "GOOGLE_API_KEY"],
+      files: [
+        { label: "Antigravity config", path: pick("~\\.antigravity\\config.json", "~/.antigravity/config.json") },
+        { label: "Antigravity dossier", path: pick("~\\.antigravity", "~/.antigravity") }
+      ]
+    },
+    defaultModeId: "standard",
+    modes: [
+      {
+        id: "standard",
+        label: "Standard",
+        args: []
+      },
+      {
+        id: "login",
+        label: "Connexion",
+        args: ["auth", "login"]
+      }
+    ]
+  },
+  {
     id: "gemini",
-    label: "Gemini CLI",
+    label: "Gemini CLI (ancien)",
     command: "gemini",
     accent: "#0ea5e9",
     favorite: false,
@@ -380,6 +414,9 @@ const personaInjectionById = {
   // via ce canal. On l'injecte donc comme premier message (envoye au terminal
   // apres lancement) : c'est ce que Codex respecte vraiment.
   codex: { kind: "first-message" },
+  // Antigravity (TUI agentique) : on injecte la persona comme premier message,
+  // canal le plus fiable (comme Codex), sans dependre d'un fichier de contexte.
+  antigravity: { kind: "first-message" },
   opencode: { kind: "project-file", file: "AGENTS.md" },
   cursor: { kind: "project-file", file: "AGENTS.md" },
   amp: { kind: "project-file", file: "AGENTS.md" },
@@ -390,6 +427,33 @@ const personaInjectionById = {
 for (const profile of defaultProfiles) {
   if (personaInjectionById[profile.id]) {
     profile.personaInjection = personaInjectionById[profile.id];
+  }
+}
+
+// Mode non-interactif (« headless ») de chaque CLI pour le pipeline : on lance
+// la commande avec ces arguments puis le prompt en dernier argument ; la CLI
+// execute et rend une sortie texte avant de se terminer. Certains flags sont des
+// meilleures-estimations (qwen/amp/opencode) : ils restent editables par etape.
+// `stdin: true` => le prompt est envoye par l'entree standard (et NON en argument
+// de ligne de commande). Indispensable pour les prompts multi-lignes / avec des
+// caracteres speciaux (sinon PowerShell re-parse le texte et plante).
+const headlessById = {
+  claude: { args: ["-p"], stdin: true },
+  // codex exec refuse de tourner hors d'un depot git approuve sans ce flag.
+  codex: { args: ["exec", "--skip-git-repo-check"], stdin: true },
+  antigravity: { args: [], stdin: true },
+  gemini: { args: [], stdin: true },
+  qwen: { args: [], stdin: true },
+  // Aider attend le message via --message (pas de lecture stdin) : mode argument.
+  aider: { args: ["--yes", "--no-stream", "--message"], stdin: false },
+  opencode: { args: ["run"], stdin: false },
+  cursor: { args: ["--print", "--output-format", "text"], stdin: false },
+  amp: { args: [], stdin: true }
+};
+
+for (const profile of defaultProfiles) {
+  if (headlessById[profile.id]) {
+    profile.headless = headlessById[profile.id];
   }
 }
 
