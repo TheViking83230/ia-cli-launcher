@@ -137,8 +137,8 @@ const defaultProfiles = [
     authChecks: {
       env: ["GEMINI_API_KEY", "GOOGLE_API_KEY"],
       files: [
-        { label: "Antigravity config", path: pick("~\\.antigravity\\config.json", "~/.antigravity/config.json") },
-        { label: "Antigravity dossier", path: pick("~\\.antigravity", "~/.antigravity") }
+        { label: "Antigravity auth", path: pick("~\\.gemini\\oauth_creds.json", "~/.gemini/oauth_creds.json") },
+        { label: "Antigravity config", path: pick("~\\.gemini\\antigravity-cli\\settings.json", "~/.gemini/antigravity-cli/settings.json") }
       ]
     },
     defaultModeId: "standard",
@@ -151,7 +151,7 @@ const defaultProfiles = [
       {
         id: "login",
         label: "Connexion",
-        args: ["auth", "login"]
+        args: []
       }
     ]
   },

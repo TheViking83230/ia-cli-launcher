@@ -926,11 +926,36 @@ async function restoreSession(saved) {
   const resume = profile?.resume;
   const canResume = Boolean(resume && Array.isArray(resume.args) && resume.args.length > 0);
 
-  // Si la CLI sait reprendre la conversation, elle reaffiche elle-meme le
-  // contenu : inutile de rejouer l'historique (eviterait une duplication).
-  // Sinon on rejoue le texte sauvegarde pour retrouver le fil visuellement.
+  // Le dossier d'origine peut ne pas exister sur ce PC (historique synchronisé
+  // depuis une autre machine). On bascule alors sur le dossier sélectionné, ou
+  // on en demande un, au lieu d'échouer.
+  let cwd = saved.cwd || "";
+  let cwdChanged = false;
+  if (cwd && !(await window.launcher.dirExists(cwd))) {
+    let fallback = "";
+    if (state.selectedFolder && (await window.launcher.dirExists(state.selectedFolder))) {
+      fallback = state.selectedFolder;
+    } else {
+      flashStatus("Dossier d'origine introuvable sur ce PC — choisis un dossier pour reprendre.");
+      fallback = await window.launcher.chooseFolder();
+    }
+    if (!fallback) {
+      flashStatus("Reprise annulée (aucun dossier sélectionné).");
+      return;
+    }
+    cwd = fallback;
+    cwdChanged = true;
+  }
+
+  // Une CLI stocke sa conversation PAR dossier : si on a dû changer de dossier,
+  // elle ne peut pas reprendre la session d'origine → on rejoue le transcript
+  // sauvegardé et on démarre une CLI fraîche dans le dossier choisi.
+  const useResume = canResume && !cwdChanged;
+
+  // Si la CLI reprend elle-meme la conversation, inutile de rejouer (doublon).
+  // Sinon (ou dossier changé) on rejoue le texte sauvegarde pour voir le fil.
   let replayText = "";
-  if (!canResume && saved.id) {
+  if (!useResume && saved.id) {
     try {
       replayText = await window.launcher.readScrollback(saved.id);
     } catch {
@@ -947,7 +972,7 @@ async function restoreSession(saved) {
         profileId: saved.profileId,
         modeId: saved.modeId,
         extraArgs: saved.extraArgs || "",
-        cwd: saved.cwd
+        cwd
       }
     : null;
 
@@ -964,10 +989,10 @@ async function restoreSession(saved) {
           modeArgs: mode.args || [],
           preLaunchCommands: mode.preLaunchCommands || [],
           extraArgs: saved.extraArgs || "",
-          resumeArgs: resume?.args || [],
-          resumeReplace: Boolean(resume?.replace),
+          resumeArgs: useResume ? (resume?.args || []) : [],
+          resumeReplace: useResume ? Boolean(resume?.replace) : false,
           resumeId: saved.id,
-          cwd: saved.cwd,
+          cwd,
           profileId: saved.profileId,
           profileLabel: saved.profileLabel,
           modeId: saved.modeId,
@@ -981,7 +1006,7 @@ async function restoreSession(saved) {
       return window.launcher.runCommand({
         title: saved.title,
         commandLine: saved.commandLine,
-        cwd: saved.cwd,
+        cwd,
         resumeId: saved.id,
         profileId: saved.profileId,
         profileLabel: saved.profileLabel,
@@ -3789,6 +3814,10 @@ function handleUpdateStatus(payload) {
 // Notes de version affichees apres une mise a jour. La cle est le numero de
 // version, la valeur la liste des nouveautes a montrer.
 const CHANGELOG = {
+  "0.1.15": [
+    "Reprise d'historique entre PC : si le dossier d'origine n'existe pas sur ce PC (historique synchronisé depuis une autre machine), la session se relance dans le dossier sélectionné (ou demandé) au lieu d'échouer.",
+    "Dans ce cas, le contenu de la conversation est rejoué automatiquement pour le retrouver."
+  ],
   "0.1.14": [
     "Vue partagée : affiche deux onglets côte à côte (bouton ⧉ de la barre d'outils ou Ctrl+\\).",
     "Clique un onglet pour le charger dans le pane sélectionné ; clique un terminal pour lui donner le focus.",

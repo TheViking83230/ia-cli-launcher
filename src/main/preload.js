@@ -28,6 +28,7 @@ contextBridge.exposeInMainWorld("launcher", {
   },
   getAuthStatus: () => ipcRenderer.invoke("auth:get-status"),
   checkCommand: (command) => ipcRenderer.invoke("system:check-command", command),
+  dirExists: (dirPath) => ipcRenderer.invoke("system:dir-exists", dirPath),
   openUrl: (url) => ipcRenderer.invoke("system:open-url", url),
   startTerminal: (request) => ipcRenderer.invoke("terminal:start", request),
   runCommand: (request) => ipcRenderer.invoke("terminal:run-command", request),

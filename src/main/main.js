@@ -595,6 +595,7 @@ function normalizeConfig(config) {
       modes: [...defaultModes, ...customModes],
       // Mecanismes internes (non editables par l'utilisateur) : toujours pris des
       // valeurs par defaut pour que les mises a jour de methode s'appliquent.
+      authChecks: defaultProfile.authChecks,
       personaInjection: defaultProfile.personaInjection,
       headless: defaultProfile.headless
     };
@@ -1085,6 +1086,16 @@ app.whenReady().then(() => {
 
   ipcMain.handle("system:check-command", async (_event, command) => {
     return checkCommand(command);
+  });
+
+  // Indique si un chemin existe et est un dossier (utile pour la reprise d'un
+  // historique synchronisé depuis un autre PC : le dossier d'origine peut manquer).
+  ipcMain.handle("system:dir-exists", (_event, dirPath) => {
+    try {
+      return fs.statSync(path.resolve(String(dirPath || ""))).isDirectory();
+    } catch {
+      return false;
+    }
   });
 
   ipcMain.handle("terminal:start", (_event, request) => {
