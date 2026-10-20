@@ -12,10 +12,12 @@ const os = require("node:os");
 const path = require("node:path");
 
 const CLAUDE_USAGE_URL = "https://api.anthropic.com/api/oauth/usage";
-// Intervalle minimal entre deux appels a l'API (le resultat est mis en cache).
-const CLAUDE_REFRESH_MS = 60 * 1000;
-// Pause plus longue si l'API limite les appels (HTTP 429).
+// Intervalle minimal entre deux appels a l'API, toutes instances confondues
+// (le resultat est mis en cache et partage).
+const CLAUDE_REFRESH_MS = 2 * 60 * 1000;
+// Pause croissante si l'API limite les appels (HTTP 429).
 const CLAUDE_BACKOFF_MS = 5 * 60 * 1000;
+const CLAUDE_BACKOFF_MAX_MS = 30 * 60 * 1000;
 
 const claudeCache = {
   data: null,
@@ -93,7 +95,54 @@ function claudeWindows(data) {
     .filter(Boolean);
 }
 
+// Cache disque partage par toutes les instances du launcher (app installee,
+// version de test...) : une seule interroge Anthropic, les autres relisent ce
+// fichier. Il survit aussi aux redemarrages (dernieres valeurs connues).
+const SHARED_CACHE_FILE = path.join(os.tmpdir(), "ia-cli-launcher-claude-usage.json");
+
+function loadSharedCache() {
+  const shared = readJson(SHARED_CACHE_FILE);
+  if (!shared) {
+    return;
+  }
+  if (shared.data && (shared.fetchedAt || 0) > claudeCache.fetchedAt) {
+    claudeCache.data = shared.data;
+    claudeCache.fetchedAt = shared.fetchedAt;
+    claudeCache.error = "";
+  }
+  claudeCache.nextFetchAt = Math.max(claudeCache.nextFetchAt, shared.nextFetchAt || 0);
+  claudeCache.backoffMs = Math.max(claudeCache.backoffMs || 0, shared.backoffMs || 0);
+  if (shared.error && !claudeCache.data) {
+    claudeCache.error = shared.error;
+  }
+}
+
+function saveSharedCache() {
+  try {
+    fs.writeFileSync(SHARED_CACHE_FILE, JSON.stringify({
+      data: claudeCache.data,
+      fetchedAt: claudeCache.fetchedAt,
+      nextFetchAt: claudeCache.nextFetchAt,
+      backoffMs: claudeCache.backoffMs || 0,
+      error: claudeCache.error
+    }), "utf8");
+  } catch {}
+}
+
 async function fetchClaudeUsage() {
+  // Une autre instance a peut-etre deja interroge Anthropic (ou est en pause).
+  loadSharedCache();
+  if (Date.now() < claudeCache.nextFetchAt) {
+    return;
+  }
+  // On reserve le prochain appel avant meme d'interroger (evite les doublons).
+  claudeCache.nextFetchAt = Date.now() + CLAUDE_REFRESH_MS;
+  saveSharedCache();
+  await requestClaudeUsage();
+  saveSharedCache();
+}
+
+async function requestClaudeUsage() {
   const token = readClaudeToken();
   if (!token) {
     claudeCache.error = "Connecte-toi à Claude Code (abonnement Pro / Max) pour voir le quota.";
@@ -118,9 +167,16 @@ async function fetchClaudeUsage() {
       signal: AbortSignal.timeout(15000)
     });
     if (response.status === 429) {
-      claudeCache.nextFetchAt = Date.now() + CLAUDE_BACKOFF_MS;
+      // Limite d'appels : attente croissante (5, 10, 20 puis 30 min), ou celle
+      // demandee par le serveur ; les dernieres valeurs restent affichees.
+      const retryAfter = Number(response.headers.get("retry-after")) * 1000;
+      claudeCache.backoffMs = Math.min(CLAUDE_BACKOFF_MAX_MS, claudeCache.backoffMs ? claudeCache.backoffMs * 2 : CLAUDE_BACKOFF_MS);
+      claudeCache.nextFetchAt = Date.now() + Math.max(retryAfter || 0, claudeCache.backoffMs);
+      const at = new Date(claudeCache.nextFetchAt).toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" });
+      claudeCache.error = `Quota limité par Anthropic (trop de demandes) : nouvel essai à ${at}.`;
       return;
     }
+    claudeCache.backoffMs = 0;
     if (!response.ok) {
       claudeCache.error = `Quota Claude indisponible (HTTP ${response.status}).`;
       claudeCache.nextFetchAt = Date.now() + CLAUDE_REFRESH_MS;
@@ -151,7 +207,8 @@ async function getClaudeUsage() {
   if (!windows.length) {
     return { available: false, reason: claudeCache.error || "Quota Claude indisponible." };
   }
-  return { available: true, windows, updatedAt: claudeCache.fetchedAt };
+  // "notice" : valeurs affichees mais pas a jour (ex. limite d'appels).
+  return { available: true, windows, updatedAt: claudeCache.fetchedAt, notice: claudeCache.error || "" };
 }
 
 // --- Codex -----------------------------------------------------------------

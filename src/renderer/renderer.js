@@ -678,7 +678,15 @@ function renderUsageBar(session, profile, data) {
       bar.appendChild(createUsageMeter(win.label, win.usedPercent, detail, title + updated));
     }
     renderQuotaAlert(bar, session, profile, data.windows || []);
-  } else if (!session.context) {
+    if (data.notice) {
+      // Dernieres valeurs connues, pas a jour : on le signale discretement.
+      const stale = document.createElement("span");
+      stale.className = "usage-stale";
+      stale.textContent = "⚠";
+      stale.title = `${data.notice}${updated}`;
+      bar.appendChild(stale);
+    }
+  } else {
     const note = document.createElement("span");
     note.className = "usage-note";
     note.textContent = data?.reason || "Quota indisponible.";
@@ -4931,6 +4939,11 @@ function handleUpdateStatus(payload) {
 // Notes de version affichees apres une mise a jour. La cle est le numero de
 // version, la valeur la liste des nouveautes a montrer.
 const CHANGELOG = {
+  "0.1.20": [
+    "Correctif : le quota Claude ne disparaît plus quand la jauge de contexte est affichée ; s'il est momentanément indisponible, la raison s'affiche.",
+    "Quota Claude interrogé au plus toutes les 2 minutes, toutes fenêtres du launcher confondues (cache partagé), pour ne plus être limité par Anthropic.",
+    "Si Anthropic limite quand même les demandes, les dernières valeurs restent affichées avec un ⚠ et l'heure du prochain essai."
+  ],
   "0.1.19": [
     "Remplissage du contexte : une jauge « Contexte » dans l'en-tête montre à quel point la mémoire de la conversation est pleine (Claude, Codex), pour savoir quand faire un /compact.",
     "Alerte « attend ton accord » : quand Claude est bloqué sur une autorisation ou une question, la pastille de l'onglet clignote en orange et une notification te prévient.",

@@ -672,6 +672,7 @@ select:focus {
 }
 
 .usage-note {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
 }
@@ -1007,6 +1008,11 @@ select:focus {
   align-self: flex-start;
   min-height: 30px;
   padding: 0 14px;
+}
+
+.usage-stale {
+  color: var(--warning);
+  cursor: help;
 }
 
 /* Quota presque epuise : proposer le relais vers une autre IA. */
