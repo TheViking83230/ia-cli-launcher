@@ -7,7 +7,7 @@
 //   rollout-*.jsonl dont la 1re ligne (session_meta) donne l'id et le dossier.
 //   On prend celle du meme dossier creee juste apres le lancement de l'onglet.
 // - Autres CLI : pas d'identifiant exploitable (reprise generique ou contexte).
-const { execFile } = require("node:child_process");
+const { exec, execFile } = require("node:child_process");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
@@ -63,7 +63,14 @@ function claudeConfigDir() {
   return process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), ".claude");
 }
 
-async function findClaudeConversation(rootPid) {
+// Fichier d'etat ecrit par un processus Claude interactif.
+function readClaudeProcessFile(pid) {
+  const data = readJson(path.join(claudeConfigDir(), "sessions", `${pid}.json`));
+  return data?.sessionId ? data : null;
+}
+
+// Processus Claude descendant du terminal d'un onglet (et son fichier d'etat).
+async function findClaudeProcess(rootPid) {
   const dir = path.join(claudeConfigDir(), "sessions");
   let files;
   try {
@@ -78,10 +85,15 @@ async function findClaudeConversation(rootPid) {
   for (const name of files) {
     const data = readJson(path.join(dir, name));
     if (data?.sessionId && pids.has(Number(data.pid))) {
-      return { conversationId: String(data.sessionId), busy: data.status === "busy" };
+      return data;
     }
   }
   return null;
+}
+
+async function findClaudeConversation(rootPid) {
+  const data = await findClaudeProcess(rootPid);
+  return data ? { conversationId: String(data.sessionId), busy: data.status === "busy" } : null;
 }
 
 // Premiere ligne d'un fichier (la session_meta de Codex peut etre longue).
@@ -136,13 +148,15 @@ function findCodexConversation(cwd, startedAt) {
       const created = Date.parse(payload.timestamp || meta?.timestamp || "");
       // Petite marge : l'horodatage de la CLI et celui du launcher different un peu.
       if (meta?.type === "session_meta" && payload.id && samePath(payload.cwd, cwd) && created >= startedAt - 5000) {
-        candidates.push({ id: String(payload.id), created });
+        candidates.push({ id: String(payload.id), created, cliVersion: String(payload.cli_version || "") });
       }
     }
   }
   // La plus proche du lancement de l'onglet : c'est celle qu'il a creee.
   candidates.sort((a, b) => a.created - b.created);
-  return candidates.length ? { conversationId: candidates[0].id, busy: false } : null;
+  return candidates.length
+    ? { conversationId: candidates[0].id, busy: false, cliVersion: candidates[0].cliVersion }
+    : null;
 }
 
 // Renvoie { conversationId, busy } ou null si la conversation est introuvable.
@@ -158,4 +172,100 @@ async function getConversationInfo({ profileId, pid, cwd, startedAt }) {
   return null;
 }
 
-module.exports = { getConversationInfo };
+// --- Etat en direct de l'IA d'un onglet (pastille d'onglet, mise a jour) ----
+// Appele toutes les 2 s pour chaque onglet : les recherches couteuses (arbre
+// des processus, fichiers Codex) sont mises en cache par terminal d'onglet.
+const LOOKUP_RETRY_MS = 10 * 1000;
+const INSTALLED_REFRESH_MS = 10 * 60 * 1000;
+const liveCache = new Map();
+const installedCache = new Map();
+const VERSION_COMMANDS = { claude: "claude --version", codex: "codex --version" };
+
+// Version installee de la CLI (rafraichie en arriere-plan, jamais bloquante).
+function installedVersion(profileId) {
+  const command = VERSION_COMMANDS[profileId];
+  if (!command) {
+    return "";
+  }
+  const entry = installedCache.get(profileId) || { version: "", checkedAt: 0, pending: false };
+  if (!entry.pending && Date.now() - entry.checkedAt > INSTALLED_REFRESH_MS) {
+    entry.pending = true;
+    exec(command, { windowsHide: true, timeout: 20000 }, (error, stdout) => {
+      const match = String(stdout || "").match(/\d+\.\d+\.\d+/);
+      if (!error && match) {
+        entry.version = match[0];
+      }
+      entry.checkedAt = Date.now();
+      entry.pending = false;
+    });
+  }
+  installedCache.set(profileId, entry);
+  return entry.version;
+}
+
+// Vrai si la version a est strictement plus recente que b ("2.1.304" > "2.1.303").
+function isNewer(a, b) {
+  const left = String(a || "").split(".").map(Number);
+  const right = String(b || "").split(".").map(Number);
+  if (!a || !b || left.some(Number.isNaN) || right.some(Number.isNaN)) {
+    return false;
+  }
+  for (let i = 0; i < Math.max(left.length, right.length); i += 1) {
+    const diff = (left[i] || 0) - (right[i] || 0);
+    if (diff !== 0) {
+      return diff > 0;
+    }
+  }
+  return false;
+}
+
+async function claudeLive(rootPid) {
+  const cache = liveCache.get(rootPid) || { cliPid: 0, lookupAt: 0 };
+  liveCache.set(rootPid, cache);
+  let data = cache.cliPid ? readClaudeProcessFile(cache.cliPid) : null;
+  if (!data && Date.now() - cache.lookupAt > LOOKUP_RETRY_MS) {
+    cache.lookupAt = Date.now();
+    data = await findClaudeProcess(rootPid);
+    cache.cliPid = data ? Number(data.pid) : 0;
+  }
+  if (!data) {
+    return { state: null, runningVersion: "" };
+  }
+  return { state: data.status === "busy" ? "busy" : "idle", runningVersion: String(data.version || "") };
+}
+
+function codexLive(rootPid, cwd, startedAt) {
+  const cache = liveCache.get(rootPid) || { cliVersion: "", lookupAt: 0 };
+  liveCache.set(rootPid, cache);
+  if (!cache.cliVersion && Date.now() - cache.lookupAt > LOOKUP_RETRY_MS) {
+    cache.lookupAt = Date.now();
+    cache.cliVersion = findCodexConversation(cwd, startedAt)?.cliVersion || "";
+  }
+  // Codex n'expose pas son etat : le renderer le deduit de l'activite du terminal.
+  return { state: null, runningVersion: cache.cliVersion };
+}
+
+// Renvoie { state: "busy"|"idle"|null, runningVersion, installedVersion, updatePending }.
+async function getLiveStatus({ profileId, pid, cwd, startedAt }) {
+  let live = { state: null, runningVersion: "" };
+  try {
+    if (profileId === "claude" && pid) {
+      live = await claudeLive(Number(pid));
+    } else if (profileId === "codex" && pid && cwd && startedAt) {
+      live = codexLive(Number(pid), cwd, Number(startedAt));
+    }
+  } catch {}
+  const installed = installedVersion(profileId);
+  return {
+    ...live,
+    installedVersion: installed,
+    updatePending: Boolean(live.runningVersion && installed && isNewer(installed, live.runningVersion))
+  };
+}
+
+// Oubli du cache d'un terminal ferme.
+function forgetLive(pid) {
+  liveCache.delete(Number(pid));
+}
+
+module.exports = { getConversationInfo, getLiveStatus, forgetLive };

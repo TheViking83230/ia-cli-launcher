@@ -548,6 +548,7 @@ function layoutPanes() {
     }
   }
 
+  clearVisibleAttention();
   updateSessionHeader();
   updateSplitControls();
   fitVisible();
@@ -561,6 +562,7 @@ function updateSessionHeader() {
   elements.renameActiveTabButton.disabled = !active;
   // Redemarrage possible seulement pour un onglet lance depuis un profil CLI.
   elements.restartAiButton.disabled = !active || isPipeline || active.spec?.kind !== "profile";
+  updateRestartButton();
   if (elements.relaySelect) {
     // Le relais ne s'applique qu'aux onglets terminaux.
     elements.relaySelect.disabled = !active || isPipeline;
@@ -671,6 +673,7 @@ function renderUsageBar(session, profile, data) {
       }
       bar.appendChild(createUsageMeter(win.label, win.usedPercent, detail, title + updated));
     }
+    renderQuotaAlert(bar, session, profile, data.windows || []);
   } else {
     const note = document.createElement("span");
     note.className = "usage-note";
@@ -678,6 +681,50 @@ function renderUsageBar(session, profile, data) {
     note.title = note.textContent;
     bar.appendChild(note);
   }
+}
+
+// Quota presque epuise (>= 90 %) : bouton pour passer le relais a une autre
+// IA, et une alerte unique par fenetre de quota (jusqu'a sa reinitialisation).
+const QUOTA_ALERT_PERCENT = 90;
+const quotaAlertsShown = new Set();
+
+function renderQuotaAlert(bar, session, profile, windows) {
+  const critical = windows
+    .filter((win) => !win.reset && win.usedPercent >= QUOTA_ALERT_PERCENT)
+    .sort((a, b) => b.usedPercent - a.usedPercent)[0];
+  if (!critical) {
+    return;
+  }
+  const label = profile?.label || "Cette IA";
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "usage-relay";
+  button.textContent = "Relais →";
+  button.title = `Quota ${critical.label} de ${label} à ${Math.round(critical.usedPercent)} % : passer la conversation à une autre IA`;
+  button.addEventListener("click", () => openRelayPicker());
+  bar.appendChild(button);
+
+  const key = `${sessionProfileId(session)}|${critical.id}|${critical.resetsAt || ""}`;
+  if (!quotaAlertsShown.has(key)) {
+    quotaAlertsShown.add(key);
+    const message = `Quota ${critical.label} de ${label} à ${Math.round(critical.usedPercent)} % : tu peux passer le relais à une autre IA (bouton « Relais → »).`;
+    flashStatus(message);
+    if (notificationsEnabled()) {
+      window.launcher.notify({ title: "Quota presque épuisé", body: message, sessionId: session.id }).catch(() => {});
+    }
+  }
+}
+
+// Ouvre la liste de relais de l'en-tete.
+function openRelayPicker() {
+  const select = elements.relaySelect;
+  if (!select || select.disabled) {
+    return;
+  }
+  select.focus();
+  try {
+    select.showPicker();
+  } catch {}
 }
 
 async function refreshUsageBar() {
@@ -700,6 +747,173 @@ async function refreshUsageBar() {
     return;
   }
   renderUsageBar(session, profile, data);
+}
+
+// --- Etat des IA dans les onglets + mise a jour en attente -----------------
+// Claude indique lui-meme s'il travaille ; pour les autres CLI on le deduit de
+// l'activite du terminal (une CLI qui travaille redessine son ecran en continu).
+const LIVE_POLL_MS = 2000;
+const OUTPUT_BUSY_MS = 2500;
+// Duree minimale de travail (CLI sans etat exact) avant de notifier la fin.
+const HEURISTIC_MIN_BUSY_MS = 8000;
+let livePollRunning = false;
+
+function notificationsEnabled() {
+  try {
+    return window.localStorage.getItem("aiDoneNotifications") !== "off";
+  } catch {
+    return true;
+  }
+}
+
+function toggleNotifications() {
+  const enabled = !notificationsEnabled();
+  try {
+    window.localStorage.setItem("aiDoneNotifications", enabled ? "on" : "off");
+  } catch {}
+  flashStatus(enabled
+    ? "Notifications de fin de tâche activées."
+    : "Notifications de fin de tâche désactivées.");
+}
+
+function isSessionVisible(session) {
+  if (state.split) {
+    return session.id === state.split.leftId || session.id === state.split.rightId;
+  }
+  return session.id === state.activeSessionId;
+}
+
+// Un onglet affiche et regarde n'a plus besoin d'attirer l'attention.
+function clearVisibleAttention() {
+  if (!document.hasFocus()) {
+    return;
+  }
+  for (const session of state.sessions.values()) {
+    if (session.attention && isSessionVisible(session)) {
+      session.attention = false;
+      session.tab.classList.remove("ai-attention");
+    }
+  }
+}
+
+function applyAiState(session, aiState, exact) {
+  const previous = session.aiState;
+  const now = Date.now();
+  if (aiState === "busy" && previous !== "busy") {
+    session.busySince = now;
+  }
+  if (previous === "busy" && aiState === "idle") {
+    const longEnough = exact || now - (session.busySince || now) >= HEURISTIC_MIN_BUSY_MS;
+    const unseen = !isSessionVisible(session) || !document.hasFocus();
+    if (longEnough && unseen) {
+      session.attention = true;
+      if (notificationsEnabled()) {
+        const label = getProfileLabel(sessionProfileId(session)) || "L'IA";
+        window.launcher.notify({
+          title: session.title,
+          body: `${label} a terminé et attend ta réponse.`,
+          sessionId: session.id
+        }).catch(() => {});
+      }
+    }
+  }
+  session.aiState = aiState;
+  session.tab.classList.toggle("ai-busy", aiState === "busy");
+  session.tab.classList.toggle("ai-attention", Boolean(session.attention));
+}
+
+function applyUpdateState(session, status) {
+  const pending = Boolean(status?.updatePending);
+  if (pending && !session.updatePending) {
+    const label = getProfileLabel(sessionProfileId(session)) || "La CLI";
+    flashStatus(`${label} ${status.installedVersion} est installé (onglet « ${session.title} » en ${status.runningVersion}) : clique ↻ pour l'appliquer.`);
+  }
+  session.updatePending = pending;
+  session.versions = status ? { running: status.runningVersion, installed: status.installedVersion } : null;
+  session.tab.classList.toggle("ai-update", pending);
+  session.tab.title = pending
+    ? `Mise à jour en attente : ${status.runningVersion} → ${status.installedVersion} (↻ pour l'appliquer)`
+    : "";
+}
+
+function updateRestartButton() {
+  const active = state.sessions.get(state.activeSessionId);
+  const button = elements.restartAiButton;
+  const pending = Boolean(active?.updatePending);
+  button.classList.toggle("has-update", pending);
+  button.title = pending
+    ? `Mise à jour disponible (${active.versions.running} → ${active.versions.installed}) : redémarrer l'IA pour l'appliquer, en reprenant la conversation`
+    : "Redémarrer l'IA de l'onglet (ex. après une mise à jour) en reprenant la conversation";
+}
+
+async function refreshLiveStatus() {
+  if (livePollRunning) {
+    return;
+  }
+  livePollRunning = true;
+  try {
+    const watched = [...state.sessions.values()].filter(
+      (s) => s.type === "terminal" && s.spec?.kind === "profile" && !s.tab.classList.contains("ended") && !s.relaying
+    );
+    if (!watched.length) {
+      return;
+    }
+    let statuses = {};
+    try {
+      statuses = (await window.launcher.getLiveStatus(watched.map((s) => s.id))) || {};
+    } catch {}
+    for (const session of watched) {
+      // Session redemarree ou fermee pendant la requete.
+      if (state.sessions.get(session.id) !== session || session.relaying) {
+        continue;
+      }
+      const status = statuses[session.id];
+      const exact = Boolean(status?.state);
+      const aiState = exact
+        ? status.state
+        : Date.now() - (session.lastOutputAt || 0) < OUTPUT_BUSY_MS ? "busy" : "idle";
+      applyAiState(session, aiState, exact);
+      applyUpdateState(session, status);
+    }
+    updateRestartButton();
+  } finally {
+    livePollRunning = false;
+  }
+}
+
+// Relance l'une apres l'autre les IA choisies (chacune reprend sa conversation).
+async function restartSessions(sessions, label) {
+  if (!sessions.length) {
+    flashStatus(`Aucun onglet à redémarrer (${label}).`);
+    return;
+  }
+  const titles = sessions.map((s) => `• ${s.title}`).join("\n");
+  if (!window.confirm(`Redémarrer ${sessions.length} onglet(s) (${label}) en reprenant leur conversation ?\n\n${titles}`)) {
+    return;
+  }
+  for (const session of sessions) {
+    if (state.sessions.get(session.id) === session) {
+      await restartSession(session.id);
+    }
+  }
+}
+
+function restartAllWithUpdate() {
+  const sessions = [...state.sessions.values()].filter((s) => s.updatePending);
+  restartSessions(sessions, "mise à jour en attente");
+}
+
+function restartAllSameCli() {
+  const active = state.sessions.get(state.activeSessionId);
+  const profileId = sessionProfileId(active);
+  if (!profileId) {
+    flashStatus("Aucun onglet IA actif.");
+    return;
+  }
+  const sessions = [...state.sessions.values()].filter(
+    (s) => s.type === "terminal" && s.spec?.kind === "profile" && sessionProfileId(s) === profileId
+  );
+  restartSessions(sessions, `toutes les IA ${getProfileLabel(profileId) || profileId}`);
 }
 
 // Ajuste la taille des terminaux actuellement visibles puis redonne le focus.
@@ -1612,11 +1826,13 @@ function rebindSession(session, oldId, startResult, profile, spec) {
   session.container.dataset.sessionId = session.id;
   state.sessions.set(session.id, session);
   session.relaying = false;
-  session.tab.classList.remove("ended");
+  // Nouveau process : etat et version seront relus au prochain sondage.
+  session.aiState = null;
+  session.attention = false;
+  session.lastOutputAt = 0;
+  applyUpdateState(session, null);
+  session.tab.classList.remove("ended", "ai-busy", "ai-attention");
   session.tab.style.setProperty("--tab-accent", profile.accent);
-  if (state.activeSessionId === oldId) {
-    state.activeSessionId = session.id;
-  }
   if (state.split) {
     if (state.split.leftId === oldId) {
       state.split.leftId = session.id;
@@ -1625,7 +1841,12 @@ function rebindSession(session, oldId, startResult, profile, spec) {
       state.split.rightId = session.id;
     }
   }
-  setActiveSession(session.id);
+  // Un onglet en arriere-plan (redemarrage groupe) reste en arriere-plan.
+  if (state.activeSessionId === oldId) {
+    setActiveSession(session.id);
+  } else {
+    layoutPanes();
+  }
 }
 
 // --- Redemarrage de l'IA d'un onglet (ex. apres une mise a jour de la CLI) --
@@ -1972,6 +2193,9 @@ const SHORTCUT_ACTIONS = [
   { id: "duplicateTab", label: "Dupliquer l'onglet", category: "Onglets", run: () => state.activeSessionId && duplicateSession(state.activeSessionId) },
   { id: "relaunchTab", label: "Relancer l'onglet (nouvelle session)", category: "Onglets", run: () => state.activeSessionId && relaunchSession(state.activeSessionId) },
   { id: "restartAi", label: "Redémarrer l'IA (reprendre la conversation)", category: "Onglets", run: () => state.activeSessionId && restartSession(state.activeSessionId) },
+  { id: "restartAllUpdates", label: "Redémarrer toutes les IA ayant une mise à jour en attente", category: "Onglets", run: () => restartAllWithUpdate() },
+  { id: "restartAllSameCli", label: "Redémarrer toutes les IA du même type que l'onglet actif", category: "Onglets", run: () => restartAllSameCli() },
+  { id: "toggleNotifications", label: "Activer / désactiver les notifications de fin de tâche", category: "Onglets", run: () => toggleNotifications() },
   { id: "renameTab", label: "Renommer l'onglet actif", category: "Onglets", run: () => focusRenameActive() },
   { id: "toggleSplit", label: "Vue partagée (deux onglets côte à côte)", category: "Vue partagée", run: () => toggleSplit() },
   { id: "toggleMirror", label: "Saisie synchronisée (miroir)", category: "Vue partagée", run: () => toggleMirror() },
@@ -3746,6 +3970,7 @@ function bindEvents() {
     const session = state.sessions.get(id);
     if (session) {
       session.hasOutput = true;
+      session.lastOutputAt = Date.now();
       session.terminal.write(data);
     }
   });
@@ -4111,6 +4336,13 @@ function handleUpdateStatus(payload) {
 // Notes de version affichees apres une mise a jour. La cle est le numero de
 // version, la valeur la liste des nouveautes a montrer.
 const CHANGELOG = {
+  "0.1.18": [
+    "État des IA sur les onglets : la pastille pulse quand l'IA travaille et s'entoure d'un halo quand elle a fini et attend ta réponse.",
+    "Notification Windows quand une IA a fini dans un onglet que tu ne regardes pas ; un clic t'y ramène (désactivable dans la palette de commandes).",
+    "Mise à jour d'une IA détectée : le bouton ↻ affiche un badge orange quand une version plus récente de Claude ou Codex est installée que celle qui tourne dans l'onglet.",
+    "Quota presque épuisé (90 %) : alerte et bouton « Relais → » pour passer la conversation à une autre IA.",
+    "Palette de commandes : redémarrer d'un coup toutes les IA ayant une mise à jour en attente, ou toutes celles du même type."
+  ],
   "0.1.17": [
     "Bouton « Redémarrer l'IA » dans l'en-tête (à côté du renommage) et raccourci Ctrl+Maj+U : relance l'IA de l'onglet, par exemple après sa mise à jour, sans perdre la conversation.",
     "Claude et Codex reprennent exactement la conversation de l'onglet, même avec plusieurs onglets dans le même dossier ; les autres CLI reprennent leur dernière conversation ou reçoivent le fil affiché comme contexte.",
@@ -4335,6 +4567,15 @@ async function init() {
       refreshUsageBar();
     }
   }, USAGE_POLL_MS);
+
+  // Etat des IA des onglets : actif meme fenetre masquee (notifications de fin).
+  window.setInterval(refreshLiveStatus, LIVE_POLL_MS);
+  window.addEventListener("focus", clearVisibleAttention);
+  window.launcher.onNotifyActivate(({ sessionId }) => {
+    if (state.sessions.has(sessionId)) {
+      setActiveSession(sessionId);
+    }
+  });
 }
 
 function showRestoreToast(count) {

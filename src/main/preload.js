@@ -38,6 +38,13 @@ contextBridge.exposeInMainWorld("launcher", {
   renameTerminal: (id, title) => ipcRenderer.invoke("terminal:rename", { id, title }),
   killTerminal: (id) => ipcRenderer.invoke("terminal:kill", id),
   getConversationInfo: (id) => ipcRenderer.invoke("terminal:conversation-info", id),
+  getLiveStatus: (ids) => ipcRenderer.invoke("terminal:live-status", ids),
+  notify: (request) => ipcRenderer.invoke("app:notify", request),
+  onNotifyActivate: (handler) => {
+    const listener = (_event, payload) => handler(payload);
+    ipcRenderer.on("notify:activate", listener);
+    return () => ipcRenderer.off("notify:activate", listener);
+  },
   pasteFilePath: (id, filePath) => ipcRenderer.invoke("terminal:paste-file-path", { id, filePath }),
   showTerminalContextMenu: (id, selectedText) => ipcRenderer.invoke("terminal:context-menu", { id, selectedText }),
   getSavedSessions: () => ipcRenderer.invoke("sessions:get-saved"),

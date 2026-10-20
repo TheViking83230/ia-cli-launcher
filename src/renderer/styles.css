@@ -527,6 +527,60 @@ select:focus {
   color: var(--text);
 }
 
+/* Etat de l'IA d'un onglet : pastille qui pulse pendant le travail, halo
+   quand elle a fini et attend une reponse (onglet pas encore regarde). */
+.tab.ai-busy .tab-dot {
+  animation: tab-dot-pulse 1.1s ease-in-out infinite;
+}
+
+.tab.ai-attention .tab-dot {
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--tab-accent, var(--accent)) 35%, transparent);
+}
+
+.tab.ai-attention .tab-title {
+  color: var(--text);
+  font-weight: 700;
+}
+
+/* Mise a jour en attente : la pastille prend un contour orange. */
+.tab.ai-update .tab-dot {
+  outline: 2px solid var(--warning);
+  outline-offset: 1px;
+}
+
+@keyframes tab-dot-pulse {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+
+  50% {
+    opacity: 0.35;
+    transform: scale(0.7);
+  }
+}
+
+#restartAiButton {
+  position: relative;
+}
+
+#restartAiButton.has-update {
+  border-color: var(--warning);
+  color: var(--warning);
+}
+
+#restartAiButton.has-update::after {
+  content: "";
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--warning);
+}
+
 /* Quota de l'IA de l'onglet actif, dans l'en-tete a droite du titre. */
 .usage-bar {
   display: flex;
@@ -608,6 +662,23 @@ select:focus {
 .usage-note {
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+/* Quota presque epuise : proposer le relais vers une autre IA. */
+.usage-relay {
+  flex-shrink: 0;
+  padding: 3px 9px;
+  border: 1px solid var(--danger);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--danger) 14%, transparent);
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.usage-relay:hover {
+  background: color-mix(in srgb, var(--danger) 28%, transparent);
 }
 
 /* Affichage degressif selon la place : le detail reste dans l'infobulle. */

@@ -1,4 +1,4 @@
-const { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, shell } = require("electron");
+const { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, Notification, shell } = require("electron");
 const crypto = require("node:crypto");
 const fs = require("node:fs");
 const path = require("node:path");
@@ -890,6 +890,7 @@ function startShellSession(request) {
     // La session terminee reste dans l'historique global (transcription
     // conservee) ; on note seulement l'heure de fin.
     updateHistoryEntry(id, { endedAt: new Date().toISOString() });
+    conversation.forgetLive(ptyProcess.pid);
     sessions.delete(id);
     saveSessionsToDisk();
     sendToRenderer("terminal:exit", { id, exitCode, signal });
@@ -962,7 +963,14 @@ function checkForUpdatesManual() {
   });
 }
 
+// Notifications Windows affichees (voir "app:notify").
+const activeNotifications = new Set();
+
 app.whenReady().then(() => {
+  // Identite de l'appli pour les notifications Windows (meme id que l'installeur).
+  if (process.platform === "win32") {
+    app.setAppUserModelId("fr.devopa.ia-cli-launcher");
+  }
   pruneHistory();
   setAppMenu();
   createWindow();
@@ -1231,6 +1239,47 @@ app.whenReady().then(() => {
       cwd: session.cwd,
       startedAt: session.startedAt
     });
+  });
+
+  // Etat en direct des IA des onglets : { [id]: { state, runningVersion, ... } }.
+  ipcMain.handle("terminal:live-status", async (_event, ids) => {
+    const result = {};
+    await Promise.all((Array.isArray(ids) ? ids : []).map(async (id) => {
+      const session = sessions.get(id);
+      if (session) {
+        result[id] = await conversation.getLiveStatus({
+          profileId: session.profileId,
+          pid: session.pty.pid,
+          cwd: session.cwd,
+          startedAt: session.startedAt
+        });
+      }
+    }));
+    return result;
+  });
+
+  // Notification Windows ; un clic ramene la fenetre sur l'onglet concerne.
+  ipcMain.handle("app:notify", (_event, { title, body, sessionId } = {}) => {
+    if (!Notification.isSupported()) {
+      return false;
+    }
+    const notification = new Notification({ title: String(title || ""), body: String(body || "") });
+    // Reference gardee jusqu'a la fermeture : sinon le clic peut etre perdu.
+    activeNotifications.add(notification);
+    notification.on("close", () => activeNotifications.delete(notification));
+    notification.on("click", () => {
+      activeNotifications.delete(notification);
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        if (mainWindow.isMinimized()) {
+          mainWindow.restore();
+        }
+        mainWindow.show();
+        mainWindow.focus();
+        sendToRenderer("notify:activate", { sessionId });
+      }
+    });
+    notification.show();
+    return true;
   });
 
   ipcMain.handle("sessions:get-saved", () => loadSessionsFromDisk());
