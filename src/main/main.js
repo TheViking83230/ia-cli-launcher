@@ -8,6 +8,8 @@ const { defaultProfiles, defaultPersonas } = require("./defaultProfiles");
 const platform = require("./platform");
 const gdrive = require("./gdrive");
 const pipeline = require("./pipeline");
+const usage = require("./usage");
+const conversation = require("./conversation");
 
 // Sous Linux, certaines distributions recentes (Ubuntu 24.04+) bloquent les
 // "user namespaces" non privilegies : le sandbox Chromium ne peut alors pas
@@ -15,6 +17,12 @@ const pipeline = require("./pipeline");
 // sandbox sous Linux (outil interne, pas de contenu web distant).
 if (process.platform === "linux") {
   app.commandLine.appendSwitch("no-sandbox");
+}
+
+// En developpement (npm start), dossier de donnees separe : la version de test
+// ne doit ni restaurer ni ecraser les sessions/profils de l'app installee.
+if (!app.isPackaged) {
+  app.setPath("userData", `${app.getPath("userData")}-dev`);
 }
 
 const sessions = new Map();
@@ -861,6 +869,7 @@ function startShellSession(request) {
     extraArgs: String(request.extraArgs || ""),
     output: "",
     flushTimer: null,
+    startedAt: Date.now(),
     profileId: request.profileId,
     profileLabel: request.profileLabel,
     modeId: request.modeId,
@@ -889,7 +898,8 @@ function startShellSession(request) {
   return {
     id,
     command: commandLine,
-    cwd
+    cwd,
+    profileId: request.profileId || ""
   };
 }
 
@@ -981,6 +991,7 @@ app.whenReady().then(() => {
   ipcMain.handle("config:save", (_event, config) => writeConfig(config));
   ipcMain.handle("config:reset", () => writeConfig({ version: 1, profiles: defaultProfiles }));
   ipcMain.handle("auth:get-status", () => getAuthStatuses());
+  ipcMain.handle("usage:get", (_event, request) => usage.getUsage(request));
 
   // Synchronisation des donnees du launcher (dossier cloud choisi).
   ipcMain.handle("sync:get", () => {
@@ -1104,8 +1115,11 @@ app.whenReady().then(() => {
       throw new Error("Commande CLI manquante.");
     }
 
-    const modeArgs = splitArgs(request.modeArgs);
-    const extraArgs = splitArgs(request.extraArgs);
+    // Reprise d'une conversation precise : on retire les flags qui en
+    // choisiraient une autre (ex. "--continue" d'un mode Claude).
+    const stripArgs = new Set(splitArgs(request.stripArgs));
+    const modeArgs = splitArgs(request.modeArgs).filter((arg) => !stripArgs.has(arg));
+    const extraArgs = splitArgs(request.extraArgs).filter((arg) => !stripArgs.has(arg));
     const resumeArgs = splitArgs(request.resumeArgs);
     const preLaunchCommands = Array.isArray(request.preLaunchCommands) ? request.preLaunchCommands : [];
 
@@ -1203,6 +1217,20 @@ app.whenReady().then(() => {
     sessions.delete(id);
     saveSessionsToDisk();
     return true;
+  });
+
+  // Conversation tenue par la CLI d'un onglet (pour la reprendre au redemarrage).
+  ipcMain.handle("terminal:conversation-info", (_event, id) => {
+    const session = sessions.get(id);
+    if (!session) {
+      return null;
+    }
+    return conversation.getConversationInfo({
+      profileId: session.profileId,
+      pid: session.pty.pid,
+      cwd: session.cwd,
+      startedAt: session.startedAt
+    });
   });
 
   ipcMain.handle("sessions:get-saved", () => loadSessionsFromDisk());

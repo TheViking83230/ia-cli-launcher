@@ -9,3 +9,6 @@ out/
 # Dossiers de depots crees par erreur par GitHub Desktop (a supprimer)
 /gitrepo/
 /ia-cli-launcher/
+
+# Reglages locaux de Claude Code
+.claude/

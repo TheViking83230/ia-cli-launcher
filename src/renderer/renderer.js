@@ -41,11 +41,13 @@ const elements = {
   resetProfilesButton: document.getElementById("resetProfilesButton"),
   launchButton: document.getElementById("launchButton"),
   tabs: document.getElementById("tabs"),
+  usageBar: document.getElementById("usageBar"),
   terminalHost: document.getElementById("terminalHost"),
   emptyState: document.getElementById("emptyState"),
   activeTitleInput: document.getElementById("activeTitleInput"),
   renameActiveTabButton: document.getElementById("renameActiveTabButton"),
   relaySelect: document.getElementById("relaySelect"),
+  restartAiButton: document.getElementById("restartAiButton"),
   toggleSidebarButton: document.getElementById("toggleSidebarButton"),
   sessionMeta: document.getElementById("sessionMeta"),
   historyButton: document.getElementById("historyButton"),
@@ -557,6 +559,8 @@ function updateSessionHeader() {
   elements.emptyState.classList.toggle("hidden", state.sessions.size > 0);
   elements.activeTitleInput.disabled = !active;
   elements.renameActiveTabButton.disabled = !active;
+  // Redemarrage possible seulement pour un onglet lance depuis un profil CLI.
+  elements.restartAiButton.disabled = !active || isPipeline || active.spec?.kind !== "profile";
   if (elements.relaySelect) {
     // Le relais ne s'applique qu'aux onglets terminaux.
     elements.relaySelect.disabled = !active || isPipeline;
@@ -566,6 +570,136 @@ function updateSessionHeader() {
   elements.sessionMeta.textContent = active
     ? isPipeline ? "Pipeline IA" : `${active.command} | ${active.cwd}`
     : "Pret";
+  refreshUsageBar();
+}
+
+// --- Quota de l'IA de l'onglet actif (en-tete, a droite du titre) ----------
+// Rafraichi periodiquement ; le processus principal met en cache les appels.
+const USAGE_POLL_MS = 2000;
+let usageRequestToken = 0;
+
+function sessionProfileId(session) {
+  return session?.spec?.profileId || session?.profileId || "";
+}
+
+// Temps restant avant reinitialisation, ex. "2 h 05", "3 j 4 h", "12 min".
+function formatResetIn(resetsAt) {
+  const ms = resetsAt - Date.now();
+  if (!(ms > 0)) {
+    return "";
+  }
+  const minutes = Math.ceil(ms / 60000);
+  const days = Math.floor(minutes / 1440);
+  const hours = Math.floor((minutes % 1440) / 60);
+  const mins = minutes % 60;
+  if (days > 0) {
+    return `${days} j ${hours} h`;
+  }
+  if (hours > 0) {
+    return `${hours} h ${String(mins).padStart(2, "0")}`;
+  }
+  return `${mins} min`;
+}
+
+function usageLevel(percent) {
+  if (percent >= 90) {
+    return "danger";
+  }
+  return percent >= 70 ? "warning" : "ok";
+}
+
+function createUsageMeter(label, percent, detail, title) {
+  const item = document.createElement("div");
+  item.className = `usage-item ${usageLevel(percent)}`;
+  if (title) {
+    item.title = title;
+  }
+
+  const name = document.createElement("span");
+  name.textContent = label;
+
+  const track = document.createElement("div");
+  track.className = "usage-track";
+  const fill = document.createElement("div");
+  fill.className = "usage-fill";
+  fill.style.width = `${Math.max(0, Math.min(100, percent))}%`;
+  track.appendChild(fill);
+
+  const value = document.createElement("span");
+  value.className = "usage-value";
+  value.textContent = `${Math.round(percent)} %`;
+
+  item.append(name, track, value);
+  if (detail) {
+    const extra = document.createElement("span");
+    extra.className = "usage-detail";
+    extra.textContent = detail;
+    item.appendChild(extra);
+  }
+  return item;
+}
+
+function renderUsageBar(session, profile, data) {
+  const bar = elements.usageBar;
+  bar.innerHTML = "";
+  if (!session) {
+    bar.classList.add("empty");
+    return;
+  }
+  bar.classList.remove("empty");
+  bar.style.setProperty("--usage-accent", profile?.accent || session.accent || "#10b981");
+
+  const head = document.createElement("div");
+  head.className = "usage-head";
+  const dot = document.createElement("span");
+  dot.className = "usage-dot";
+  const name = document.createElement("strong");
+  name.textContent = profile?.label || "CLI";
+  head.append(dot, name);
+  bar.appendChild(head);
+
+  if (data?.available) {
+    const updated = data.updatedAt ? ` · mis à jour à ${new Date(data.updatedAt).toLocaleTimeString("fr-FR")}` : "";
+    for (const win of data.windows || []) {
+      let detail = "";
+      let title = `Quota ${win.label} consommé`;
+      if (win.reset) {
+        detail = "réinitialisé";
+      } else if (win.resetsAt) {
+        detail = `↻ ${formatResetIn(win.resetsAt)}`;
+        title += ` · réinitialisation le ${new Date(win.resetsAt).toLocaleString("fr-FR")}`;
+      }
+      bar.appendChild(createUsageMeter(win.label, win.usedPercent, detail, title + updated));
+    }
+  } else {
+    const note = document.createElement("span");
+    note.className = "usage-note";
+    note.textContent = data?.reason || "Quota indisponible.";
+    note.title = note.textContent;
+    bar.appendChild(note);
+  }
+}
+
+async function refreshUsageBar() {
+  const session = state.sessions.get(state.activeSessionId);
+  const token = ++usageRequestToken;
+  if (!session || session.type !== "terminal") {
+    renderUsageBar(null);
+    return;
+  }
+  const profileId = sessionProfileId(session);
+  const profile = state.config?.profiles.find((p) => p.id === profileId);
+  let data = null;
+  try {
+    data = await window.launcher.getUsage(profileId);
+  } catch {
+    data = null;
+  }
+  // Une requete plus recente (changement d'onglet) a pris le relais.
+  if (token !== usageRequestToken) {
+    return;
+  }
+  renderUsageBar(session, profile, data);
 }
 
 // Ajuste la taille des terminaux actuellement visibles puis redonne le focus.
@@ -846,6 +980,7 @@ async function openTerminalSession({ title, accent, starter, replayText, spec })
     title,
     command: startResult.command,
     cwd: startResult.cwd,
+    profileId: startResult.profileId || "",
     terminal,
     fitAddon,
     searchAddon,
@@ -1442,37 +1577,191 @@ async function relaySession(id, profileId) {
   }
 
   // 6. On rebranche le MÊME onglet/terminal sur le nouveau process (nouvel id).
-  //    Les handlers d'entree/sortie lisent session.id en direct : il suffit de
-  //    re-cler la session dans la Map.
-  state.sessions.delete(id);
-  session.id = startResult.id;
-  session.command = startResult.command;
-  session.cwd = startResult.cwd;
-  session.accent = profile.accent;
-  session.spec = {
+  // Contexte gardé pour le réinjecter si cette IA est redémarrée plus tard.
+  session.handoffPrompt = handoff;
+  rebindSession(session, id, startResult, profile, {
     kind: "profile",
     title: session.title,
     accent: profile.accent,
     profileId: profile.id,
     modeId: mode.id,
     extraArgs: "",
-    cwd: session.cwd,
+    cwd: startResult.cwd,
     personaId: session.spec?.personaId || ""
-  };
-  state.sessions.set(session.id, session);
-  session.relaying = false;
-  session.tab.classList.remove("ended");
-  session.tab.style.setProperty("--tab-accent", profile.accent);
-  if (state.activeSessionId === id) {
-    state.activeSessionId = session.id;
-  }
-  setActiveSession(session.id);
+  });
 
   // CLI sans canal d'instructions fiable (ex. Codex) : le contexte de relais
   // est envoye comme premier message une fois la nouvelle CLI prete.
   if (profile.personaInjection?.kind === "first-message") {
     session.hasOutput = false;
     sendFirstMessage(session, handoff);
+  }
+}
+
+// Rebranche un onglet existant (meme terminal xterm) sur un nouveau process.
+// Les handlers d'entree/sortie lisent session.id en direct : il suffit de
+// re-cler la session dans la Map.
+function rebindSession(session, oldId, startResult, profile, spec) {
+  state.sessions.delete(oldId);
+  session.id = startResult.id;
+  session.command = startResult.command;
+  session.cwd = startResult.cwd;
+  session.profileId = startResult.profileId || profile.id;
+  session.accent = profile.accent;
+  session.spec = spec;
+  session.container.dataset.sessionId = session.id;
+  state.sessions.set(session.id, session);
+  session.relaying = false;
+  session.tab.classList.remove("ended");
+  session.tab.style.setProperty("--tab-accent", profile.accent);
+  if (state.activeSessionId === oldId) {
+    state.activeSessionId = session.id;
+  }
+  if (state.split) {
+    if (state.split.leftId === oldId) {
+      state.split.leftId = session.id;
+    }
+    if (state.split.rightId === oldId) {
+      state.split.rightId = session.id;
+    }
+  }
+  setActiveSession(session.id);
+}
+
+// --- Redemarrage de l'IA d'un onglet (ex. apres une mise a jour de la CLI) --
+// La CLI est relancee dans le MEME onglet et reprend sa conversation :
+// 1. par son identifiant exact quand on le connait (Claude, Codex) ;
+// 2. sinon par la reprise generique du profil (derniere conversation du dossier) ;
+// 3. sinon (CLI sans reprise) en lui reinjectant la conversation affichee.
+function conversationResume(profileId, conversationId) {
+  if (profileId === "claude") {
+    return { resumeArgs: ["--resume", conversationId], resumeReplace: false, stripArgs: ["--continue", "-c"] };
+  }
+  if (profileId === "codex") {
+    return { resumeArgs: ["resume", conversationId], resumeReplace: true };
+  }
+  return null;
+}
+
+function buildRestartPrompt(conversationText, personaText) {
+  let convo = String(conversationText || "").trim();
+  if (convo.length > HANDOFF_MAX_CHARS) {
+    convo = `[…début de la conversation tronqué…]\n${convo.slice(-HANDOFF_MAX_CHARS)}`;
+  }
+  const preamble = [
+    "Tu viens d'être redémarré (mise à jour de l'outil) au milieu d'une conversation de développement.",
+    "Continue naturellement là où elle s'est arrêtée, sans commenter ce redémarrage.",
+    "Le dossier de travail et les fichiers déjà modifiés sont intacts ; appuie-toi dessus.",
+    "",
+    "=== Conversation jusqu'ici ===",
+    convo,
+    "=== Fin de la conversation, à toi de continuer ==="
+  ].join("\n");
+  return personaText ? `${personaText}\n\n${preamble}` : preamble;
+}
+
+async function restartSession(id) {
+  const session = state.sessions.get(id);
+  if (!session || session.type !== "terminal" || session.spec?.kind !== "profile") {
+    flashStatus("Redémarrage indisponible pour cet onglet.");
+    return;
+  }
+  if (session.restarting) {
+    return;
+  }
+  const spec = session.spec;
+  const profile = state.config.profiles.find((p) => p.id === spec.profileId);
+  const mode = profile?.modes.find((m) => m.id === spec.modeId)
+    || profile?.modes.find((m) => m.id === profile.defaultModeId)
+    || profile?.modes?.[0];
+  if (!profile || !mode) {
+    flashStatus("Profil introuvable : redémarrage impossible.");
+    return;
+  }
+
+  session.restarting = true;
+  try {
+    let info = null;
+    try {
+      info = await window.launcher.getConversationInfo(session.id);
+    } catch {}
+    if (info?.busy && !window.confirm(`${profile.label} est en train de travailler : le redémarrer maintenant interrompt la tâche en cours (la conversation est conservée).\n\nRedémarrer quand même ?`)) {
+      return;
+    }
+
+    const exact = info?.conversationId ? conversationResume(profile.id, info.conversationId) : null;
+    const generic = Array.isArray(profile.resume?.args) && profile.resume.args.length
+      ? { resumeArgs: profile.resume.args, resumeReplace: Boolean(profile.resume.replace) }
+      : null;
+    const plan = exact || generic;
+
+    // Les CLI ne gardent pas les consignes systeme d'une session : on remet la
+    // persona (ou le contexte d'un relais). Un premier message envoye au depart
+    // fait deja partie de la conversation reprise : on ne le renvoie pas.
+    const personaText = spec.personaId ? getPersonaById(spec.personaId)?.prompt || "" : "";
+    let contextPrompt = session.handoffPrompt || personaText;
+    if (!plan) {
+      let raw = "";
+      try {
+        raw = await window.launcher.readScrollback(session.id);
+      } catch {}
+      const segment = stripAnsi(raw).trim();
+      const history = session.relayHistory ? `${session.relayHistory}\n\n${segment}` : segment;
+      contextPrompt = buildRestartPrompt(history, personaText);
+      session.handoffPrompt = contextPrompt;
+    }
+    const firstMessage = profile.personaInjection?.kind === "first-message";
+    const injectNow = Boolean(contextPrompt) && !(plan && firstMessage);
+
+    flashStatus(`Redémarrage de ${profile.label}…`);
+    session.relaying = true;
+    try {
+      await window.launcher.killTerminal(session.id);
+    } catch {}
+    session.terminal.write(`\r\n\x1b[2m──────── redémarrage de ${profile.label} ────────\x1b[0m\r\n`);
+
+    const oldId = session.id;
+    let startResult;
+    try {
+      startResult = await window.launcher.startTerminal({
+        title: session.title,
+        command: profile.command,
+        modeArgs: mode.args || [],
+        preLaunchCommands: mode.preLaunchCommands || [],
+        extraArgs: spec.extraArgs || "",
+        cwd: session.cwd,
+        profileId: profile.id,
+        profileLabel: profile.label,
+        modeId: mode.id,
+        modeLabel: mode.label,
+        resumeArgs: plan?.resumeArgs || [],
+        resumeReplace: Boolean(plan?.resumeReplace),
+        stripArgs: plan?.stripArgs || [],
+        personaPrompt: injectNow ? contextPrompt : "",
+        personaInjection: injectNow ? profile.personaInjection || null : null,
+        cols: session.terminal.cols,
+        rows: session.terminal.rows
+      });
+    } catch (error) {
+      session.relaying = false;
+      session.terminal.writeln(`\r\n[redémarrage échoué: ${error.message || error}]`);
+      session.tab.classList.add("ended");
+      return;
+    }
+
+    rebindSession(session, oldId, startResult, profile, { ...spec, modeId: mode.id, cwd: startResult.cwd });
+
+    if (!plan && firstMessage && contextPrompt) {
+      session.hasOutput = false;
+      sendFirstMessage(session, contextPrompt);
+    }
+    flashStatus(exact
+      ? `${profile.label} redémarré : conversation reprise.`
+      : plan
+        ? `${profile.label} redémarré : reprise de la dernière conversation du dossier.`
+        : `${profile.label} redémarré : conversation réinjectée comme contexte.`);
+  } finally {
+    session.restarting = false;
   }
 }
 
@@ -1682,6 +1971,7 @@ const SHORTCUT_ACTIONS = [
   { id: "reopenTab", label: "Rouvrir la dernière session fermée", category: "Onglets", run: () => reopenLastClosed() },
   { id: "duplicateTab", label: "Dupliquer l'onglet", category: "Onglets", run: () => state.activeSessionId && duplicateSession(state.activeSessionId) },
   { id: "relaunchTab", label: "Relancer l'onglet (nouvelle session)", category: "Onglets", run: () => state.activeSessionId && relaunchSession(state.activeSessionId) },
+  { id: "restartAi", label: "Redémarrer l'IA (reprendre la conversation)", category: "Onglets", run: () => state.activeSessionId && restartSession(state.activeSessionId) },
   { id: "renameTab", label: "Renommer l'onglet actif", category: "Onglets", run: () => focusRenameActive() },
   { id: "toggleSplit", label: "Vue partagée (deux onglets côte à côte)", category: "Vue partagée", run: () => toggleSplit() },
   { id: "toggleMirror", label: "Saisie synchronisée (miroir)", category: "Vue partagée", run: () => toggleMirror() },
@@ -1704,6 +1994,7 @@ const DEFAULT_KEYBINDINGS = {
   reopenTab: "Ctrl+Shift+T",
   duplicateTab: "Ctrl+Shift+D",
   relaunchTab: "Ctrl+Shift+R",
+  restartAi: "Ctrl+Shift+U",
   renameTab: "F2",
   toggleSplit: "Ctrl+\\",
   toggleMirror: "Ctrl+Shift+M",
@@ -3308,6 +3599,12 @@ function bindEvents() {
     window.localStorage.setItem("lastPersonaId", elements.personaSelect.value || "");
   });
   elements.managePersonasButton.addEventListener("click", openPersonasModal);
+  elements.restartAiButton.addEventListener("click", () => {
+    if (state.activeSessionId) {
+      restartSession(state.activeSessionId);
+    }
+  });
+
   elements.relaySelect.addEventListener("change", () => {
     const targetId = elements.relaySelect.value;
     elements.relaySelect.value = "";
@@ -3814,6 +4111,16 @@ function handleUpdateStatus(payload) {
 // Notes de version affichees apres une mise a jour. La cle est le numero de
 // version, la valeur la liste des nouveautes a montrer.
 const CHANGELOG = {
+  "0.1.17": [
+    "Bouton « Redémarrer l'IA » dans l'en-tête (à côté du renommage) et raccourci Ctrl+Maj+U : relance l'IA de l'onglet, par exemple après sa mise à jour, sans perdre la conversation.",
+    "Claude et Codex reprennent exactement la conversation de l'onglet, même avec plusieurs onglets dans le même dossier ; les autres CLI reprennent leur dernière conversation ou reçoivent le fil affiché comme contexte.",
+    "Si Claude est en train de travailler, une confirmation est demandée avant d'interrompre la tâche."
+  ],
+  "0.1.16": [
+    "Quota en temps réel dans l'en-tête, à droite du titre de l'onglet : l'utilisation de l'IA de l'onglet actif (Claude : fenêtres 5 h et 7 jours, avec le délai avant réinitialisation ; Codex : ses fenêtres de quota).",
+    "Jauges vertes, orange à 70 %, rouges à 90 % ; le survol affiche la date exacte de réinitialisation.",
+    "L'affichage se simplifie automatiquement quand la fenêtre est étroite."
+  ],
   "0.1.15": [
     "Reprise d'historique entre PC : si le dossier d'origine n'existe pas sur ce PC (historique synchronisé depuis une autre machine), la session se relance dans le dossier sélectionné (ou demandé) au lieu d'échouer.",
     "Dans ce cas, le contenu de la conversation est rejoué automatiquement pour le retrouver."
@@ -4021,6 +4328,13 @@ async function init() {
   }
 
   maybeShowChangelog();
+
+  // Quota en temps reel de l'IA de l'onglet actif (inutile fenetre masquee).
+  window.setInterval(() => {
+    if (!document.hidden) {
+      refreshUsageBar();
+    }
+  }, USAGE_POLL_MS);
 }
 
 function showRestoreToast(count) {

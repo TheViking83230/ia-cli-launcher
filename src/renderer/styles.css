@@ -398,6 +398,9 @@ select:focus {
   grid-template-rows: 82px 45px minmax(0, 1fr) 34px;
   min-width: 0;
   height: 100vh;
+  /* Reference des container queries de l'en-tete (largeur reelle de la zone,
+     barre laterale ouverte ou repliee). */
+  container: workspace / inline-size;
 }
 
 .topbar {
@@ -410,6 +413,17 @@ select:focus {
   background: #111318;
 }
 
+/* Zone titre : elle retrecit (titre tronque) plutot que d'ecraser la barre
+   d'outils, qui garde sa taille. */
+.topbar > div:first-child {
+  flex: 1;
+  min-width: 0;
+}
+
+.topbar .toolbar {
+  flex-shrink: 0;
+}
+
 .eyebrow {
   margin-bottom: 3px;
   color: var(--muted);
@@ -420,7 +434,7 @@ select:focus {
 
 .title-edit-row {
   display: grid;
-  grid-template-columns: minmax(140px, min(520px, 46vw)) 40px auto;
+  grid-template-columns: minmax(110px, 520px) 40px 40px auto minmax(0, auto);
   align-items: center;
   gap: 8px;
 }
@@ -511,6 +525,126 @@ select:focus {
 .tab-close:hover {
   background: #2b323e;
   color: var(--text);
+}
+
+/* Quota de l'IA de l'onglet actif, dans l'en-tete a droite du titre. */
+.usage-bar {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  min-width: 0;
+  margin-left: 10px;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.usage-bar.empty {
+  display: none;
+}
+
+.usage-head {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.usage-head strong {
+  color: var(--text);
+  font-weight: 700;
+}
+
+.usage-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--usage-accent, var(--accent));
+}
+
+.usage-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  --usage-color: var(--accent);
+}
+
+.usage-item.warning {
+  --usage-color: var(--warning);
+}
+
+.usage-item.danger {
+  --usage-color: var(--danger);
+}
+
+.usage-track {
+  width: 70px;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--panel-strong);
+  overflow: hidden;
+}
+
+.usage-fill {
+  height: 100%;
+  border-radius: 3px;
+  background: var(--usage-color);
+  transition: width 0.4s ease;
+}
+
+.usage-value {
+  min-width: 34px;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+  font-weight: 650;
+}
+
+.usage-detail,
+.usage-note {
+  color: var(--soft);
+}
+
+.usage-note {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Affichage degressif selon la place : le detail reste dans l'infobulle. */
+@container workspace (max-width: 1320px) {
+  .usage-detail,
+  .usage-head strong {
+    display: none;
+  }
+
+  .usage-bar {
+    gap: 12px;
+  }
+}
+
+@container workspace (max-width: 1040px) {
+  .usage-track {
+    display: none;
+  }
+
+  .usage-item {
+    gap: 5px;
+  }
+
+  .usage-value {
+    min-width: 0;
+    color: var(--usage-color);
+  }
+}
+
+@container workspace (max-width: 860px) {
+  .usage-item ~ .usage-item {
+    display: none;
+  }
+
+  .usage-bar {
+    margin-left: 4px;
+  }
 }
 
 .terminal-host {

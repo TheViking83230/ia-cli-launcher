@@ -27,6 +27,7 @@ contextBridge.exposeInMainWorld("launcher", {
     return () => ipcRenderer.off("gdrive:synced", listener);
   },
   getAuthStatus: () => ipcRenderer.invoke("auth:get-status"),
+  getUsage: (profileId) => ipcRenderer.invoke("usage:get", { profileId }),
   checkCommand: (command) => ipcRenderer.invoke("system:check-command", command),
   dirExists: (dirPath) => ipcRenderer.invoke("system:dir-exists", dirPath),
   openUrl: (url) => ipcRenderer.invoke("system:open-url", url),
@@ -36,6 +37,7 @@ contextBridge.exposeInMainWorld("launcher", {
   resizeTerminal: (id, cols, rows) => ipcRenderer.invoke("terminal:resize", { id, cols, rows }),
   renameTerminal: (id, title) => ipcRenderer.invoke("terminal:rename", { id, title }),
   killTerminal: (id) => ipcRenderer.invoke("terminal:kill", id),
+  getConversationInfo: (id) => ipcRenderer.invoke("terminal:conversation-info", id),
   pasteFilePath: (id, filePath) => ipcRenderer.invoke("terminal:paste-file-path", { id, filePath }),
   showTerminalContextMenu: (id, selectedText) => ipcRenderer.invoke("terminal:context-menu", { id, selectedText }),
   getSavedSessions: () => ipcRenderer.invoke("sessions:get-saved"),
