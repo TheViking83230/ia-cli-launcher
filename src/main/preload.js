@@ -40,6 +40,9 @@ contextBridge.exposeInMainWorld("launcher", {
   getConversationInfo: (id) => ipcRenderer.invoke("terminal:conversation-info", id),
   getLiveStatus: (ids) => ipcRenderer.invoke("terminal:live-status", ids),
   notify: (request) => ipcRenderer.invoke("app:notify", request),
+  listClaudeConversations: () => ipcRenderer.invoke("claude:conversations"),
+  gitStatus: (cwd) => ipcRenderer.invoke("git:status", cwd),
+  gitDiff: (cwd, file, untracked) => ipcRenderer.invoke("git:diff", { cwd, file, untracked }),
   onNotifyActivate: (handler) => {
     const listener = (_event, payload) => handler(payload);
     ipcRenderer.on("notify:activate", listener);

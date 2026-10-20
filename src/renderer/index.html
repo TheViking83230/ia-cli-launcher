@@ -179,6 +179,7 @@
               <select id="relaySelect" class="relay-select" title="Passer le relais à une autre IA (même conversation)" disabled>
                 <option value="">Relais →</option>
               </select>
+              <button id="gitChip" class="git-chip hidden" type="button" title="Changements Git du dossier de l'onglet"></button>
               <div id="usageBar" class="usage-bar empty" aria-live="polite"></div>
             </div>
           </div>
@@ -191,6 +192,12 @@
             </button>
             <button id="pipelineButton" class="icon-button" type="button" title="Pipeline IA (enchaîner plusieurs IA)">
               <i data-lucide="workflow"></i>
+            </button>
+            <button id="promptsButton" class="icon-button" type="button" title="Bibliothèque de prompts (Ctrl+Maj+L)">
+              <i data-lucide="library"></i>
+            </button>
+            <button id="conversationsButton" class="icon-button" type="button" title="Conversations Claude (Ctrl+Maj+O)">
+              <i data-lucide="messages-square"></i>
             </button>
             <button id="historyButton" class="icon-button" type="button" title="Historique global">
               <i data-lucide="history"></i>

@@ -1,6 +1,6 @@
 {
   "name": "ia-cli-launcher",
-  "version": "0.1.18",
+  "version": "0.1.19",
   "description": "Lanceur Windows admin avec onglets terminal pour CLI IA.",
   "author": "Dev OpA",
   "homepage": "https://devopa.fr",
@@ -16,6 +16,7 @@
     "dist:linux": "electron-builder --linux deb AppImage",
     "release:win": "electron-builder --win nsis --publish always",
     "release:linux": "electron-builder --linux deb AppImage --publish always",
+    "release": "node scripts/release.js",
     "sign:dev": "powershell -ExecutionPolicy Bypass -File scripts/sign-windows.ps1 -Path dist -CreateSelfSigned",
     "sign:pfx": "powershell -ExecutionPolicy Bypass -File scripts/sign-windows.ps1 -Path dist"
   },

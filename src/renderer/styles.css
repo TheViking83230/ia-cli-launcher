@@ -434,7 +434,7 @@ select:focus {
 
 .title-edit-row {
   display: grid;
-  grid-template-columns: minmax(110px, 520px) 40px 40px auto minmax(0, auto);
+  grid-template-columns: minmax(110px, 520px) 40px 40px auto auto minmax(0, auto);
   align-items: center;
   gap: 8px;
 }
@@ -540,6 +540,18 @@ select:focus {
 .tab.ai-attention .tab-title {
   color: var(--text);
   font-weight: 700;
+}
+
+/* L'IA attend un accord ou une reponse : pastille orange qui clignote. */
+.tab.ai-waiting .tab-dot {
+  background: var(--warning);
+  animation: tab-dot-blink 0.9s steps(2, start) infinite;
+}
+
+@keyframes tab-dot-blink {
+  to {
+    visibility: hidden;
+  }
 }
 
 /* Mise a jour en attente : la pastille prend un contour orange. */
@@ -662,6 +674,339 @@ select:focus {
 .usage-note {
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+/* Pastille Git (branche + nombre de fichiers modifies) dans l'en-tete. */
+.git-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 34px;
+  max-width: 220px;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--panel-strong);
+  color: var(--muted);
+  font-size: 12px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.git-chip:hover {
+  color: var(--text);
+}
+
+.git-chip.hidden {
+  display: none;
+}
+
+.git-chip svg {
+  width: 15px;
+  height: 15px;
+  flex-shrink: 0;
+}
+
+.git-branch {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.git-count {
+  min-width: 18px;
+  padding: 1px 6px;
+  border-radius: 9px;
+  background: #2b323e;
+  color: var(--text);
+  font-weight: 700;
+  text-align: center;
+}
+
+.git-count.fresh {
+  background: color-mix(in srgb, var(--accent) 30%, transparent);
+}
+
+.git-count.hidden {
+  display: none;
+}
+
+@container workspace (max-width: 1040px) {
+  .git-branch {
+    display: none;
+  }
+}
+
+.git-dialog,
+.conversations-dialog,
+.prompts-dialog {
+  width: min(980px, 100%);
+  max-height: min(86vh, 860px);
+}
+
+.conversations-dialog,
+.prompts-dialog {
+  width: min(760px, 100%);
+}
+
+.git-body {
+  display: grid;
+  grid-template-columns: minmax(200px, 300px) minmax(0, 1fr);
+  gap: 12px;
+  min-height: 360px;
+}
+
+.git-file-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  overflow-y: auto;
+}
+
+.git-file {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text);
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.git-file:hover,
+.git-file.active {
+  background: var(--panel-strong);
+}
+
+.git-file-status {
+  flex-shrink: 0;
+  min-width: 58px;
+  color: var(--warning);
+  font-size: 11px;
+}
+
+.git-file-status.s-new,
+.git-file-status.s-ajouté {
+  color: var(--accent);
+}
+
+.git-file-status.s-supprimé,
+.git-file-status.s-conflit {
+  color: var(--danger);
+}
+
+.git-file-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  direction: rtl;
+  text-align: left;
+}
+
+.git-file-fresh {
+  flex-shrink: 0;
+  margin-left: auto;
+  padding: 0 5px;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+  color: var(--accent);
+  font-size: 10px;
+}
+
+.git-diff {
+  overflow: auto;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--terminal);
+  color: var(--muted);
+  font-family: "Cascadia Mono", Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.45;
+  white-space: pre;
+}
+
+.git-diff .diff-add {
+  background: rgba(69, 212, 131, 0.12);
+  color: #7ee2a8;
+}
+
+.git-diff .diff-del {
+  background: rgba(255, 107, 107, 0.12);
+  color: #ff9a9a;
+}
+
+.git-diff .diff-hunk {
+  color: #7aa7ff;
+}
+
+.git-diff .diff-meta {
+  color: var(--soft);
+}
+
+/* Explorateur des conversations Claude. */
+.conversations-search {
+  margin: 12px 18px 0;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--panel-strong);
+  color: var(--text);
+}
+
+.conversations-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.conversation-item {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 9px 11px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel-strong);
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+}
+
+.conversation-item:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+
+.conversation-item:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.conversation-top {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.conversation-title {
+  flex: 1;
+  overflow: hidden;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.conversation-date,
+.conversation-meta {
+  color: var(--soft);
+  font-size: 11px;
+}
+
+.conversation-open {
+  padding: 0 6px;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+  color: var(--accent);
+  font-size: 10px;
+}
+
+.conversation-meta,
+.conversation-preview {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.conversation-preview {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+/* Bibliotheque de prompts. */
+.prompts-dialog .changelog-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.prompts-actions {
+  justify-content: space-between;
+}
+
+.prompt-card {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel-strong);
+}
+
+.prompt-title {
+  color: var(--text);
+  font-weight: 700;
+}
+
+.prompt-text {
+  display: -webkit-box;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 12px;
+  white-space: pre-wrap;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+}
+
+.prompt-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.prompt-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 28px;
+  padding: 0 9px;
+  font-size: 12px;
+}
+
+.prompt-btn svg {
+  width: 14px;
+  height: 14px;
+}
+
+.prompt-editor input,
+.prompt-editor textarea {
+  width: 100%;
+  padding: 7px 9px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--terminal);
+  color: var(--text);
+  font: inherit;
+  resize: vertical;
+}
+
+.prompt-multi {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding-top: 6px;
+  border-top: 1px solid var(--line);
+  color: var(--text);
+  font-size: 12px;
+}
+
+.prompt-multi .primary-button {
+  align-self: flex-start;
+  min-height: 30px;
+  padding: 0 14px;
 }
 
 /* Quota presque epuise : proposer le relais vers une autre IA. */

@@ -48,6 +48,9 @@ const elements = {
   renameActiveTabButton: document.getElementById("renameActiveTabButton"),
   relaySelect: document.getElementById("relaySelect"),
   restartAiButton: document.getElementById("restartAiButton"),
+  gitChip: document.getElementById("gitChip"),
+  promptsButton: document.getElementById("promptsButton"),
+  conversationsButton: document.getElementById("conversationsButton"),
   toggleSidebarButton: document.getElementById("toggleSidebarButton"),
   sessionMeta: document.getElementById("sessionMeta"),
   historyButton: document.getElementById("historyButton"),
@@ -563,6 +566,7 @@ function updateSessionHeader() {
   // Redemarrage possible seulement pour un onglet lance depuis un profil CLI.
   elements.restartAiButton.disabled = !active || isPipeline || active.spec?.kind !== "profile";
   updateRestartButton();
+  refreshGitChip();
   if (elements.relaySelect) {
     // Le relais ne s'applique qu'aux onglets terminaux.
     elements.relaySelect.disabled = !active || isPipeline;
@@ -674,13 +678,41 @@ function renderUsageBar(session, profile, data) {
       bar.appendChild(createUsageMeter(win.label, win.usedPercent, detail, title + updated));
     }
     renderQuotaAlert(bar, session, profile, data.windows || []);
-  } else {
+  } else if (!session.context) {
     const note = document.createElement("span");
     note.className = "usage-note";
     note.textContent = data?.reason || "Quota indisponible.";
     note.title = note.textContent;
     bar.appendChild(note);
   }
+  renderContextMeter(bar, session);
+}
+
+// "276599" -> "277 k", "1000000" -> "1 M".
+function formatTokens(count) {
+  const value = Number(count) || 0;
+  if (value >= 1000000) {
+    return `${(value / 1000000).toFixed(value % 1000000 === 0 ? 0 : 1).replace(".", ",")} M`;
+  }
+  if (value >= 1000) {
+    return `${Math.round(value / 1000)} k`;
+  }
+  return String(value);
+}
+
+// Remplissage de la memoire de travail de la conversation de l'onglet.
+function renderContextMeter(bar, session) {
+  const context = session.context;
+  if (!context?.window) {
+    return;
+  }
+  const detail = `${formatTokens(context.tokens)} / ${formatTokens(context.window)}`;
+  const title = `Contexte de la conversation : ${context.tokens.toLocaleString("fr-FR")} tokens sur ${context.window.toLocaleString("fr-FR")}`
+    + (context.model ? ` (${context.model})` : "")
+    + ". Pense à /compact avant qu'il ne soit plein.";
+  const meter = createUsageMeter("Contexte", context.percent, detail, title);
+  meter.classList.add("usage-context");
+  bar.appendChild(meter);
 }
 
 // Quota presque epuise (>= 90 %) : bouton pour passer le relais a une autre
@@ -796,29 +828,49 @@ function clearVisibleAttention() {
   }
 }
 
-function applyAiState(session, aiState, exact) {
+// Libelle de ce que Claude attend (champ "waitingFor" de son fichier d'etat).
+function describeWaiting(waitingFor) {
+  const reason = String(waitingFor || "").toLowerCase();
+  if (!reason || reason.includes("permission") || reason.includes("approv")) {
+    return "attend ton accord";
+  }
+  if (reason.includes("input") || reason.includes("question")) {
+    return "attend ta réponse";
+  }
+  return `attend : ${waitingFor}`;
+}
+
+function notifySession(session, body) {
+  if (notificationsEnabled()) {
+    window.launcher.notify({ title: session.title, body, sessionId: session.id }).catch(() => {});
+  }
+}
+
+function applyAiState(session, aiState, exact, waitingFor) {
   const previous = session.aiState;
   const now = Date.now();
+  const unseen = !isSessionVisible(session) || !document.hasFocus();
+  const label = getProfileLabel(sessionProfileId(session)) || "L'IA";
   if (aiState === "busy" && previous !== "busy") {
     session.busySince = now;
   }
-  if (previous === "busy" && aiState === "idle") {
+  if (aiState === "waiting" && previous !== "waiting") {
+    // Bloquee sur une autorisation ou une question : a signaler tout de suite.
+    if (unseen) {
+      session.attention = true;
+      notifySession(session, `${label} ${describeWaiting(waitingFor)}.`);
+    }
+  } else if (previous === "busy" && aiState === "idle") {
     const longEnough = exact || now - (session.busySince || now) >= HEURISTIC_MIN_BUSY_MS;
-    const unseen = !isSessionVisible(session) || !document.hasFocus();
     if (longEnough && unseen) {
       session.attention = true;
-      if (notificationsEnabled()) {
-        const label = getProfileLabel(sessionProfileId(session)) || "L'IA";
-        window.launcher.notify({
-          title: session.title,
-          body: `${label} a terminé et attend ta réponse.`,
-          sessionId: session.id
-        }).catch(() => {});
-      }
+      notifySession(session, `${label} a terminé et attend ta réponse.`);
     }
   }
   session.aiState = aiState;
+  session.waitingFor = aiState === "waiting" ? waitingFor : "";
   session.tab.classList.toggle("ai-busy", aiState === "busy");
+  session.tab.classList.toggle("ai-waiting", aiState === "waiting");
   session.tab.classList.toggle("ai-attention", Boolean(session.attention));
 }
 
@@ -872,8 +924,10 @@ async function refreshLiveStatus() {
       const aiState = exact
         ? status.state
         : Date.now() - (session.lastOutputAt || 0) < OUTPUT_BUSY_MS ? "busy" : "idle";
-      applyAiState(session, aiState, exact);
+      applyAiState(session, aiState, exact, status?.waitingFor || "");
       applyUpdateState(session, status);
+      session.context = status?.context || null;
+      session.conversationId = status?.conversationId || session.conversationId || "";
     }
     updateRestartButton();
   } finally {
@@ -914,6 +968,536 @@ function restartAllSameCli() {
     (s) => s.type === "terminal" && s.spec?.kind === "profile" && sessionProfileId(s) === profileId
   );
   restartSessions(sessions, `toutes les IA ${getProfileLabel(profileId) || profileId}`);
+}
+
+// --- Fenetre modale generique (meme style que les notes de version) --------
+function createModal({ icon, title, sub, dialogClass = "" }) {
+  const overlay = document.createElement("div");
+  overlay.className = "changelog-modal";
+  const dialog = document.createElement("div");
+  dialog.className = `changelog-dialog ${dialogClass}`.trim();
+
+  const header = document.createElement("div");
+  header.className = "changelog-header";
+  header.innerHTML = `<i data-lucide="${icon}"></i><span></span>`;
+  header.querySelector("span").textContent = title;
+  dialog.appendChild(header);
+
+  if (sub) {
+    const subtitle = document.createElement("div");
+    subtitle.className = "changelog-sub";
+    subtitle.textContent = sub;
+    dialog.appendChild(subtitle);
+  }
+
+  const body = document.createElement("div");
+  body.className = "changelog-body";
+  dialog.appendChild(body);
+
+  const actions = document.createElement("div");
+  actions.className = "changelog-actions";
+  dialog.appendChild(actions);
+
+  const onKey = (event) => {
+    if (event.key === "Escape") {
+      close();
+    }
+  };
+  function close() {
+    document.removeEventListener("keydown", onKey, true);
+    overlay.remove();
+  }
+  const closeButton = document.createElement("button");
+  closeButton.type = "button";
+  closeButton.className = "primary-button";
+  closeButton.textContent = "Fermer";
+  closeButton.addEventListener("click", close);
+  actions.appendChild(closeButton);
+
+  overlay.appendChild(dialog);
+  overlay.addEventListener("click", (event) => {
+    if (event.target === overlay) {
+      close();
+    }
+  });
+  document.addEventListener("keydown", onKey, true);
+  document.body.appendChild(overlay);
+  return { overlay, dialog, header, body, actions, close };
+}
+
+function formatRelativeDate(time) {
+  const minutes = Math.round((Date.now() - time) / 60000);
+  if (minutes < 1) {
+    return "à l'instant";
+  }
+  if (minutes < 60) {
+    return `il y a ${minutes} min`;
+  }
+  const hours = Math.round(minutes / 60);
+  if (hours < 24) {
+    return `il y a ${hours} h`;
+  }
+  const days = Math.round(hours / 24);
+  if (days < 7) {
+    return `il y a ${days} j`;
+  }
+  return new Date(time).toLocaleDateString("fr-FR");
+}
+
+// --- Changements Git du dossier de l'onglet ----------------------------------
+const GIT_POLL_MS = 5000;
+let gitRequestToken = 0;
+
+function gitSessionOf(session) {
+  return session && session.type === "terminal" && session.cwd ? session : null;
+}
+
+async function refreshGitChip() {
+  const session = gitSessionOf(state.sessions.get(state.activeSessionId));
+  const chip = elements.gitChip;
+  const token = ++gitRequestToken;
+  if (!session) {
+    chip.classList.add("hidden");
+    return;
+  }
+  let status = null;
+  try {
+    status = await window.launcher.gitStatus(session.cwd);
+  } catch {}
+  if (token !== gitRequestToken) {
+    return;
+  }
+  if (!status?.isRepo) {
+    chip.classList.add("hidden");
+    return;
+  }
+  // Etat de depart : ce qui etait deja modifie a l'ouverture de l'onglet.
+  if (!session.gitBaseline) {
+    session.gitBaseline = new Set(status.files.map((f) => `${f.code}|${f.path}`));
+  }
+  session.gitStatus = status;
+  const sessionCount = status.files.filter((f) => !session.gitBaseline.has(`${f.code}|${f.path}`)).length;
+  chip.classList.remove("hidden");
+  chip.innerHTML = '<i data-lucide="git-branch"></i><span class="git-branch"></span><span class="git-count"></span>';
+  chip.querySelector(".git-branch").textContent = status.branch || "(détaché)";
+  const count = chip.querySelector(".git-count");
+  count.textContent = String(status.files.length);
+  count.classList.toggle("hidden", status.files.length === 0);
+  count.classList.toggle("fresh", sessionCount > 0);
+  chip.title = `Branche ${status.branch || "?"}`
+    + (status.ahead ? ` · ${status.ahead} commit(s) à pousser` : "")
+    + (status.behind ? ` · ${status.behind} en retard` : "")
+    + ` · ${status.files.length} fichier(s) modifié(s)`
+    + (sessionCount ? `, dont ${sessionCount} pendant cette session` : "")
+    + "\nCliquer pour voir les changements";
+  createIcons();
+}
+
+function renderDiff(container, text) {
+  container.innerHTML = "";
+  for (const line of String(text).split("\n")) {
+    const row = document.createElement("div");
+    row.textContent = line || " ";
+    if (line.startsWith("+") && !line.startsWith("+++")) {
+      row.className = "diff-add";
+    } else if (line.startsWith("-") && !line.startsWith("---")) {
+      row.className = "diff-del";
+    } else if (line.startsWith("@@")) {
+      row.className = "diff-hunk";
+    } else if (/^(diff |index |--- |\+\+\+ |new file|deleted file)/.test(line)) {
+      row.className = "diff-meta";
+    }
+    container.appendChild(row);
+  }
+}
+
+async function openGitChanges() {
+  const session = gitSessionOf(state.sessions.get(state.activeSessionId));
+  if (!session) {
+    flashStatus("Aucun onglet actif.");
+    return;
+  }
+  const status = await window.launcher.gitStatus(session.cwd).catch(() => null);
+  if (!status?.isRepo) {
+    flashStatus(status?.error || "Le dossier de cet onglet n'est pas un dépôt Git.");
+    return;
+  }
+  const baseline = session.gitBaseline || new Set();
+  const modal = createModal({
+    icon: "git-branch",
+    title: `Changements Git — ${status.branch || "?"}`,
+    sub: `${session.cwd} · ${status.files.length} fichier(s) modifié(s) non commité(s). « session » = modifié depuis l'ouverture de l'onglet.`,
+    dialogClass: "git-dialog"
+  });
+  modal.body.classList.add("git-body");
+  const list = document.createElement("div");
+  list.className = "git-file-list";
+  const viewer = document.createElement("div");
+  viewer.className = "git-diff";
+  viewer.textContent = status.files.length ? "Sélectionne un fichier." : "Aucun changement : tout est commité.";
+  modal.body.append(list, viewer);
+
+  // Fichiers touches pendant la session d'abord.
+  const files = [...status.files].sort((a, b) => {
+    const fa = baseline.has(`${a.code}|${a.path}`) ? 1 : 0;
+    const fb = baseline.has(`${b.code}|${b.path}`) ? 1 : 0;
+    return fa - fb || a.path.localeCompare(b.path);
+  });
+  for (const file of files) {
+    const item = document.createElement("button");
+    item.type = "button";
+    item.className = "git-file";
+    const badge = document.createElement("span");
+    badge.className = `git-file-status s-${file.code === "??" ? "new" : file.label}`;
+    badge.textContent = file.label;
+    const name = document.createElement("span");
+    name.className = "git-file-name";
+    name.textContent = file.path;
+    name.title = file.path;
+    item.append(badge, name);
+    if (!baseline.has(`${file.code}|${file.path}`)) {
+      const fresh = document.createElement("span");
+      fresh.className = "git-file-fresh";
+      fresh.textContent = "session";
+      item.appendChild(fresh);
+    }
+    item.addEventListener("click", async () => {
+      for (const other of list.querySelectorAll(".git-file.active")) {
+        other.classList.remove("active");
+      }
+      item.classList.add("active");
+      viewer.textContent = "Chargement…";
+      const diff = await window.launcher.gitDiff(session.cwd, file.path, file.code === "??").catch(() => null);
+      renderDiff(viewer, diff?.text || "Diff indisponible.");
+    });
+    list.appendChild(item);
+  }
+  list.querySelector(".git-file")?.click();
+  createIcons();
+}
+
+// --- Explorateur des conversations Claude ------------------------------------
+async function resumeClaudeConversation(conversation) {
+  const open = [...state.sessions.values()].find((s) => s.conversationId === conversation.id);
+  if (open) {
+    setActiveSession(open.id);
+    return;
+  }
+  const profile = state.config.profiles.find((p) => p.id === "claude");
+  const mode = profile?.modes.find((m) => m.id === profile.defaultModeId) || profile?.modes?.[0];
+  if (!profile || !mode) {
+    flashStatus("Profil Claude introuvable.");
+    return;
+  }
+  if (!conversation.dirExists) {
+    flashStatus(`Dossier introuvable sur ce PC : ${conversation.cwd}`);
+    return;
+  }
+  const title = conversation.title.slice(0, 60);
+  const spec = { kind: "profile", title, accent: profile.accent, profileId: profile.id, modeId: mode.id, extraArgs: "", cwd: conversation.cwd };
+  const session = await openTerminalSession({
+    title,
+    accent: profile.accent,
+    spec,
+    starter: ({ cols, rows }) =>
+      window.launcher.startTerminal({
+        title,
+        command: profile.command,
+        modeArgs: mode.args || [],
+        preLaunchCommands: mode.preLaunchCommands || [],
+        extraArgs: "",
+        cwd: conversation.cwd,
+        profileId: profile.id,
+        profileLabel: profile.label,
+        modeId: mode.id,
+        modeLabel: mode.label,
+        resumeArgs: ["--resume", conversation.id],
+        stripArgs: ["--continue", "-c"],
+        cols,
+        rows
+      })
+  });
+  if (session) {
+    session.conversationId = conversation.id;
+  }
+}
+
+async function openConversations() {
+  const modal = createModal({
+    icon: "messages-square",
+    title: "Conversations Claude",
+    sub: "Toutes tes conversations Claude Code, y compris celles lancées hors du launcher. Clique pour la reprendre dans un nouvel onglet.",
+    dialogClass: "conversations-dialog"
+  });
+  const search = document.createElement("input");
+  search.type = "text";
+  search.className = "conversations-search";
+  search.placeholder = "Rechercher (titre, dossier, message)…";
+  modal.body.before(search);
+  const list = document.createElement("div");
+  list.className = "conversations-list";
+  list.textContent = "Chargement…";
+  modal.body.appendChild(list);
+  createIcons();
+
+  let conversations = [];
+  try {
+    conversations = await window.launcher.listClaudeConversations();
+  } catch {}
+
+  const render = () => {
+    const query = search.value.trim().toLowerCase();
+    const openIds = new Set([...state.sessions.values()].map((s) => s.conversationId).filter(Boolean));
+    list.innerHTML = "";
+    const shown = conversations.filter((c) => !query
+      || `${c.title} ${c.cwd} ${c.firstPrompt} ${c.lastPrompt} ${c.gitBranch}`.toLowerCase().includes(query));
+    if (!shown.length) {
+      list.textContent = conversations.length ? "Aucune conversation ne correspond." : "Aucune conversation Claude trouvée.";
+      return;
+    }
+    for (const conversation of shown) {
+      const item = document.createElement("button");
+      item.type = "button";
+      item.className = "conversation-item";
+      item.disabled = !conversation.dirExists;
+
+      const top = document.createElement("div");
+      top.className = "conversation-top";
+      const title = document.createElement("span");
+      title.className = "conversation-title";
+      title.textContent = conversation.title;
+      const date = document.createElement("span");
+      date.className = "conversation-date";
+      date.textContent = formatRelativeDate(conversation.updatedAt);
+      date.title = new Date(conversation.updatedAt).toLocaleString("fr-FR");
+      top.append(title, date);
+      if (openIds.has(conversation.id)) {
+        const badge = document.createElement("span");
+        badge.className = "conversation-open";
+        badge.textContent = "ouverte";
+        top.insertBefore(badge, date);
+      }
+
+      const meta = document.createElement("div");
+      meta.className = "conversation-meta";
+      meta.textContent = conversation.cwd + (conversation.gitBranch ? ` · ${conversation.gitBranch}` : "")
+        + (conversation.dirExists ? "" : " · dossier introuvable sur ce PC");
+
+      const preview = document.createElement("div");
+      preview.className = "conversation-preview";
+      preview.textContent = conversation.lastPrompt || conversation.firstPrompt;
+
+      item.append(top, meta, preview);
+      item.addEventListener("click", () => {
+        modal.close();
+        resumeClaudeConversation(conversation);
+      });
+      list.appendChild(item);
+    }
+  };
+  search.addEventListener("input", render);
+  render();
+  search.focus();
+}
+
+// --- Bibliotheque de prompts ---------------------------------------------------
+// Colle le texte dans la CLI (collage "bracketed paste" : les retours a la
+// ligne ne valident pas le message), puis l'envoie si demande.
+function pasteToSession(session, text, submit) {
+  if (!session || !text) {
+    return;
+  }
+  // CLI sans collage "bracketed" : on met tout sur une ligne pour qu'un retour
+  // a la ligne n'envoie pas un message tronque.
+  const bracketed = Boolean(session.terminal?.modes?.bracketedPasteMode);
+  window.launcher.writeTerminal(session.id, bracketed ? `\x1b[200~${text}\x1b[201~` : text.replace(/\s*\n\s*/g, " "));
+  if (submit) {
+    window.setTimeout(() => window.launcher.writeTerminal(session.id, "\r"), 250);
+  }
+}
+
+function terminalSessions() {
+  return [...state.sessions.values()].filter((s) => s.type === "terminal" && !s.tab.classList.contains("ended"));
+}
+
+async function savePrompts(prompts) {
+  state.config.prompts = prompts;
+  state.config = await window.launcher.saveConfig(state.config);
+}
+
+function openPrompts() {
+  const modal = createModal({
+    icon: "library",
+    title: "Bibliothèque de prompts",
+    sub: "Insérer colle le texte dans l'onglet actif sans l'envoyer ; Envoyer le valide aussitôt ; « Plusieurs onglets » l'envoie à ceux que tu coches.",
+    dialogClass: "prompts-dialog"
+  });
+  const addButton = document.createElement("button");
+  addButton.type = "button";
+  addButton.className = "ghost-button";
+  addButton.innerHTML = '<i data-lucide="plus"></i> Nouveau prompt';
+  modal.actions.insertBefore(addButton, modal.actions.firstChild);
+  modal.actions.classList.add("prompts-actions");
+
+  const render = () => {
+    modal.body.innerHTML = "";
+    const prompts = state.config.prompts || [];
+    if (!prompts.length) {
+      modal.body.textContent = "Aucun prompt enregistré. Crée le premier avec « Nouveau prompt ».";
+    }
+    for (const prompt of prompts) {
+      modal.body.appendChild(renderPromptCard(prompt));
+    }
+    createIcons();
+  };
+
+  function button(icon, label, handler, extraClass = "") {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = `ghost-button prompt-btn ${extraClass}`.trim();
+    btn.innerHTML = `<i data-lucide="${icon}"></i>`;
+    btn.append(label);
+    btn.addEventListener("click", handler);
+    return btn;
+  }
+
+  function renderPromptCard(prompt) {
+    const card = document.createElement("div");
+    card.className = "prompt-card";
+    const title = document.createElement("div");
+    title.className = "prompt-title";
+    title.textContent = prompt.title;
+    const text = document.createElement("div");
+    text.className = "prompt-text";
+    text.textContent = prompt.text;
+    const row = document.createElement("div");
+    row.className = "prompt-buttons";
+    const active = () => {
+      const session = state.sessions.get(state.activeSessionId);
+      if (!session || session.type !== "terminal") {
+        flashStatus("Aucun onglet terminal actif.");
+        return null;
+      }
+      return session;
+    };
+    row.append(
+      button("text-cursor-input", "Insérer", () => {
+        const session = active();
+        if (session) {
+          modal.close();
+          pasteToSession(session, prompt.text, false);
+          session.terminal.focus();
+        }
+      }),
+      button("send-horizontal", "Envoyer", () => {
+        const session = active();
+        if (session) {
+          modal.close();
+          pasteToSession(session, prompt.text, true);
+          session.terminal.focus();
+        }
+      }),
+      button("send", "Plusieurs onglets…", () => renderMultiSend(card, prompt)),
+      button("pencil", "Modifier", () => card.replaceWith(renderPromptEditor(prompt))),
+      button("trash-2", "Supprimer", async () => {
+        if (window.confirm(`Supprimer le prompt « ${prompt.title} » ?`)) {
+          await savePrompts((state.config.prompts || []).filter((p) => p.id !== prompt.id));
+          render();
+        }
+      }, "danger")
+    );
+    card.append(title, text, row);
+    return card;
+  }
+
+  function renderMultiSend(card, prompt) {
+    card.querySelector(".prompt-multi")?.remove();
+    const box = document.createElement("div");
+    box.className = "prompt-multi";
+    const sessions = terminalSessions();
+    if (!sessions.length) {
+      box.textContent = "Aucun onglet ouvert.";
+      card.appendChild(box);
+      return;
+    }
+    for (const session of sessions) {
+      const label = document.createElement("label");
+      const check = document.createElement("input");
+      check.type = "checkbox";
+      check.value = session.id;
+      check.checked = session.id === state.activeSessionId;
+      label.append(check, ` ${session.title}`);
+      box.appendChild(label);
+    }
+    const send = document.createElement("button");
+    send.type = "button";
+    send.className = "primary-button";
+    send.textContent = "Envoyer aux onglets cochés";
+    send.addEventListener("click", () => {
+      const ids = [...box.querySelectorAll("input:checked")].map((c) => c.value);
+      for (const id of ids) {
+        pasteToSession(state.sessions.get(id), prompt.text, true);
+      }
+      modal.close();
+      flashStatus(`Prompt « ${prompt.title} » envoyé à ${ids.length} onglet(s).`);
+    });
+    box.appendChild(send);
+    card.appendChild(box);
+  }
+
+  function renderPromptEditor(prompt) {
+    const editor = document.createElement("div");
+    editor.className = "prompt-card prompt-editor";
+    const title = document.createElement("input");
+    title.type = "text";
+    title.placeholder = "Titre";
+    title.value = prompt?.title || "";
+    const text = document.createElement("textarea");
+    text.rows = 6;
+    text.placeholder = "Texte du prompt";
+    text.value = prompt?.text || "";
+    const row = document.createElement("div");
+    row.className = "prompt-buttons";
+    const save = document.createElement("button");
+    save.type = "button";
+    save.className = "primary-button";
+    save.textContent = "Enregistrer";
+    save.addEventListener("click", async () => {
+      if (!text.value.trim()) {
+        text.focus();
+        return;
+      }
+      const entry = {
+        id: prompt?.id || `p-${Date.now().toString(36)}`,
+        title: title.value.trim() || text.value.trim().slice(0, 40),
+        text: text.value.trim()
+      };
+      const prompts = [...(state.config.prompts || [])];
+      const index = prompts.findIndex((p) => p.id === entry.id);
+      if (index >= 0) {
+        prompts[index] = entry;
+      } else {
+        prompts.unshift(entry);
+      }
+      await savePrompts(prompts);
+      render();
+    });
+    const cancel = document.createElement("button");
+    cancel.type = "button";
+    cancel.className = "ghost-button";
+    cancel.textContent = "Annuler";
+    cancel.addEventListener("click", render);
+    row.append(save, cancel);
+    editor.append(title, text, row);
+    window.setTimeout(() => (prompt ? text : title).focus(), 0);
+    return editor;
+  }
+
+  addButton.addEventListener("click", () => {
+    modal.body.querySelector(".prompt-editor:not([data-existing])")?.remove();
+    modal.body.prepend(renderPromptEditor(null));
+  });
+  render();
 }
 
 // Ajuste la taille des terminaux actuellement visibles puis redonne le focus.
@@ -1831,7 +2415,8 @@ function rebindSession(session, oldId, startResult, profile, spec) {
   session.attention = false;
   session.lastOutputAt = 0;
   applyUpdateState(session, null);
-  session.tab.classList.remove("ended", "ai-busy", "ai-attention");
+  session.context = null;
+  session.tab.classList.remove("ended", "ai-busy", "ai-waiting", "ai-attention");
   session.tab.style.setProperty("--tab-accent", profile.accent);
   if (state.split) {
     if (state.split.leftId === oldId) {
@@ -2196,6 +2781,9 @@ const SHORTCUT_ACTIONS = [
   { id: "restartAllUpdates", label: "Redémarrer toutes les IA ayant une mise à jour en attente", category: "Onglets", run: () => restartAllWithUpdate() },
   { id: "restartAllSameCli", label: "Redémarrer toutes les IA du même type que l'onglet actif", category: "Onglets", run: () => restartAllSameCli() },
   { id: "toggleNotifications", label: "Activer / désactiver les notifications de fin de tâche", category: "Onglets", run: () => toggleNotifications() },
+  { id: "openConversations", label: "Conversations Claude (reprendre une conversation)", category: "Navigation", run: () => openConversations() },
+  { id: "openPrompts", label: "Bibliothèque de prompts", category: "Navigation", run: () => openPrompts() },
+  { id: "openGitChanges", label: "Changements Git de l'onglet", category: "Navigation", run: () => openGitChanges() },
   { id: "renameTab", label: "Renommer l'onglet actif", category: "Onglets", run: () => focusRenameActive() },
   { id: "toggleSplit", label: "Vue partagée (deux onglets côte à côte)", category: "Vue partagée", run: () => toggleSplit() },
   { id: "toggleMirror", label: "Saisie synchronisée (miroir)", category: "Vue partagée", run: () => toggleMirror() },
@@ -2219,6 +2807,9 @@ const DEFAULT_KEYBINDINGS = {
   duplicateTab: "Ctrl+Shift+D",
   relaunchTab: "Ctrl+Shift+R",
   restartAi: "Ctrl+Shift+U",
+  openConversations: "Ctrl+Shift+O",
+  openPrompts: "Ctrl+Shift+L",
+  openGitChanges: "Ctrl+Shift+G",
   renameTab: "F2",
   toggleSplit: "Ctrl+\\",
   toggleMirror: "Ctrl+Shift+M",
@@ -3823,6 +4414,10 @@ function bindEvents() {
     window.localStorage.setItem("lastPersonaId", elements.personaSelect.value || "");
   });
   elements.managePersonasButton.addEventListener("click", openPersonasModal);
+  elements.gitChip.addEventListener("click", openGitChanges);
+  elements.promptsButton.addEventListener("click", openPrompts);
+  elements.conversationsButton.addEventListener("click", openConversations);
+
   elements.restartAiButton.addEventListener("click", () => {
     if (state.activeSessionId) {
       restartSession(state.activeSessionId);
@@ -4336,6 +4931,13 @@ function handleUpdateStatus(payload) {
 // Notes de version affichees apres une mise a jour. La cle est le numero de
 // version, la valeur la liste des nouveautes a montrer.
 const CHANGELOG = {
+  "0.1.19": [
+    "Remplissage du contexte : une jauge « Contexte » dans l'en-tête montre à quel point la mémoire de la conversation est pleine (Claude, Codex), pour savoir quand faire un /compact.",
+    "Alerte « attend ton accord » : quand Claude est bloqué sur une autorisation ou une question, la pastille de l'onglet clignote en orange et une notification te prévient.",
+    "Conversations Claude (Ctrl+Maj+O) : toutes tes conversations, même lancées hors du launcher, avec recherche ; un clic la reprend dans un nouvel onglet.",
+    "Changements Git (Ctrl+Maj+G) : la branche et le nombre de fichiers modifiés dans l'en-tête ; un clic affiche les fichiers et leurs différences, en signalant ceux modifiés pendant la session.",
+    "Bibliothèque de prompts (Ctrl+Maj+L) : tes consignes habituelles à insérer ou envoyer dans l'onglet actif, ou dans plusieurs onglets à la fois."
+  ],
   "0.1.18": [
     "État des IA sur les onglets : la pastille pulse quand l'IA travaille et s'entoure d'un halo quand elle a fini et attend ta réponse.",
     "Notification Windows quand une IA a fini dans un onglet que tu ne regardes pas ; un clic t'y ramène (désactivable dans la palette de commandes).",
@@ -4570,6 +5172,12 @@ async function init() {
 
   // Etat des IA des onglets : actif meme fenetre masquee (notifications de fin).
   window.setInterval(refreshLiveStatus, LIVE_POLL_MS);
+  // Etat Git du dossier de l'onglet actif (fenetre visible seulement).
+  window.setInterval(() => {
+    if (!document.hidden) {
+      refreshGitChip();
+    }
+  }, GIT_POLL_MS);
   window.addEventListener("focus", clearVisibleAttention);
   window.launcher.onNotifyActivate(({ sessionId }) => {
     if (state.sessions.has(sessionId)) {

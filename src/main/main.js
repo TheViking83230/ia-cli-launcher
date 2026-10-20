@@ -10,6 +10,8 @@ const gdrive = require("./gdrive");
 const pipeline = require("./pipeline");
 const usage = require("./usage");
 const conversation = require("./conversation");
+const claudeHistory = require("./claudeHistory");
+const gitInfo = require("./gitInfo");
 
 // Sous Linux, certaines distributions recentes (Ubuntu 24.04+) bloquent les
 // "user namespaces" non privilegies : le sandbox Chromium ne peut alors pas
@@ -504,6 +506,27 @@ function normalizePersonas(personas) {
     }));
 }
 
+// Bibliotheque de prompts : amorcee avec quelques exemples si la cle est
+// absente ; respectee telle quelle sinon (meme vide).
+const DEFAULT_PROMPTS = [
+  { id: "revue", title: "Revue de code", text: "Fais une revue de code des changements en cours : bugs, cas limites oubliés, lisibilité. Classe les problèmes du plus grave au moins grave." },
+  { id: "tests", title: "Écrire les tests", text: "Écris les tests manquants pour le code que tu viens de modifier, puis lance-les et corrige ce qui échoue." },
+  { id: "expliquer", title: "Expliquer le code", text: "Explique-moi simplement comment fonctionne ce projet : les dossiers importants, le point d'entrée et le parcours d'une requête typique." }
+];
+
+function normalizePrompts(prompts) {
+  if (!Array.isArray(prompts)) {
+    return JSON.parse(JSON.stringify(DEFAULT_PROMPTS));
+  }
+  return prompts
+    .filter((prompt) => prompt && prompt.id)
+    .map((prompt) => ({
+      id: String(prompt.id),
+      title: String(prompt.title || "Prompt"),
+      text: String(prompt.text || "")
+    }));
+}
+
 // --- Injection de persona (system prompt) au lancement d'une CLI -----------
 const PERSONA_BLOCK_START = "<!-- IA-CLI-LAUNCHER:PERSONA:start (gere automatiquement, ne pas editer) -->";
 const PERSONA_BLOCK_END = "<!-- IA-CLI-LAUNCHER:PERSONA:end -->";
@@ -613,7 +636,8 @@ function normalizeConfig(config) {
   return {
     version: 1,
     profiles: [...mergedDefaults, ...customProfiles],
-    personas: normalizePersonas(config?.personas)
+    personas: normalizePersonas(config?.personas),
+    prompts: normalizePrompts(config?.prompts)
   };
 }
 
@@ -1257,6 +1281,10 @@ app.whenReady().then(() => {
     }));
     return result;
   });
+
+  ipcMain.handle("claude:conversations", () => claudeHistory.listConversations());
+  ipcMain.handle("git:status", (_event, cwd) => gitInfo.getStatus(String(cwd || "")));
+  ipcMain.handle("git:diff", (_event, { cwd, file, untracked } = {}) => gitInfo.getDiff(String(cwd || ""), String(file || ""), Boolean(untracked)));
 
   // Notification Windows ; un clic ramene la fenetre sur l'onglet concerne.
   ipcMain.handle("app:notify", (_event, { title, body, sessionId } = {}) => {

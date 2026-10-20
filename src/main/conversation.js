@@ -148,14 +148,14 @@ function findCodexConversation(cwd, startedAt) {
       const created = Date.parse(payload.timestamp || meta?.timestamp || "");
       // Petite marge : l'horodatage de la CLI et celui du launcher different un peu.
       if (meta?.type === "session_meta" && payload.id && samePath(payload.cwd, cwd) && created >= startedAt - 5000) {
-        candidates.push({ id: String(payload.id), created, cliVersion: String(payload.cli_version || "") });
+        candidates.push({ id: String(payload.id), created, cliVersion: String(payload.cli_version || ""), file: path.join(dir, name) });
       }
     }
   }
   // La plus proche du lancement de l'onglet : c'est celle qu'il a creee.
   candidates.sort((a, b) => a.created - b.created);
   return candidates.length
-    ? { conversationId: candidates[0].id, busy: false, cliVersion: candidates[0].cliVersion }
+    ? { conversationId: candidates[0].id, busy: false, cliVersion: candidates[0].cliVersion, file: candidates[0].file }
     : null;
 }
 
@@ -219,7 +219,122 @@ function isNewer(a, b) {
   return false;
 }
 
-async function claudeLive(rootPid) {
+// --- Remplissage du contexte (memoire de travail) de la conversation --------
+// Derniers octets d'un fichier (les fichiers de conversation peuvent etre gros).
+function readTail(file, maxBytes) {
+  let fd;
+  try {
+    const size = fs.statSync(file).size;
+    const length = Math.min(size, maxBytes);
+    fd = fs.openSync(file, "r");
+    const buffer = Buffer.alloc(length);
+    fs.readSync(fd, buffer, 0, length, size - length);
+    return buffer.toString("utf8");
+  } catch {
+    return "";
+  } finally {
+    if (fd !== undefined) {
+      fs.closeSync(fd);
+    }
+  }
+}
+
+// Fenetre de contexte d'un modele Claude : 1M pour la generation 4.6 et
+// suivantes, 200K avant (Haiku 4.5, Sonnet/Opus 4.5 et anterieurs) sauf
+// variante "[1m]". Au-dela de 200K consommes, c'est forcement une fenetre 1M.
+function claudeContextWindow(model, tokens) {
+  const id = String(model || "").toLowerCase();
+  const legacy = /claude-3/.test(id)
+    || /claude-(haiku|sonnet|opus)-4-[15](\b|-|$)/.test(id)
+    || /claude-(opus|sonnet)-4(-\d{8})?$/.test(id);
+  if (!legacy || id.includes("[1m]") || tokens > 200000) {
+    return 1000000;
+  }
+  return 200000;
+}
+
+const contextCache = new Map();
+
+// Fichier de conversation Claude (~/.claude/projects/<dossier encode>/<id>.jsonl).
+function claudeConversationFile(sessionId, cwd) {
+  const projects = path.join(claudeConfigDir(), "projects");
+  const direct = path.join(projects, String(cwd || "").replace(/[^A-Za-z0-9]/g, "-"), `${sessionId}.jsonl`);
+  if (fs.existsSync(direct)) {
+    return direct;
+  }
+  try {
+    for (const dir of fs.readdirSync(projects)) {
+      const candidate = path.join(projects, dir, `${sessionId}.jsonl`);
+      if (fs.existsSync(candidate)) {
+        return candidate;
+      }
+    }
+  } catch {}
+  return "";
+}
+
+// { tokens, window, percent, model } du dernier message de l'assistant.
+function claudeContext(sessionId, cwd) {
+  const cached = contextCache.get(sessionId) || {};
+  const file = cached.file && fs.existsSync(cached.file) ? cached.file : claudeConversationFile(sessionId, cwd);
+  if (!file) {
+    return null;
+  }
+  let mtimeMs = 0;
+  try {
+    mtimeMs = fs.statSync(file).mtimeMs;
+  } catch {
+    return null;
+  }
+  if (cached.file === file && cached.mtimeMs === mtimeMs) {
+    return cached.result;
+  }
+  let result = null;
+  const lines = readTail(file, 1024 * 1024).split("\n");
+  for (let i = lines.length - 1; i >= 0 && !result; i -= 1) {
+    if (!lines[i].includes('"usage"')) {
+      continue;
+    }
+    let entry;
+    try {
+      entry = JSON.parse(lines[i]);
+    } catch {
+      continue;
+    }
+    const usageData = entry?.message?.usage;
+    if (entry.type !== "assistant" || entry.isSidechain || !usageData) {
+      continue;
+    }
+    const tokens = (usageData.input_tokens || 0) + (usageData.cache_creation_input_tokens || 0)
+      + (usageData.cache_read_input_tokens || 0) + (usageData.output_tokens || 0);
+    const window = claudeContextWindow(entry.message.model, tokens);
+    result = { tokens, window, percent: Math.min(100, (tokens / window) * 100), model: String(entry.message.model || "") };
+  }
+  contextCache.set(sessionId, { file, mtimeMs, result });
+  return result;
+}
+
+// Codex : evenements "token_count" (info.last_token_usage, model_context_window).
+function codexContext(file) {
+  const lines = readTail(file, 512 * 1024).split("\n");
+  for (let i = lines.length - 1; i >= 0; i -= 1) {
+    if (!lines[i].includes("model_context_window")) {
+      continue;
+    }
+    try {
+      const info = JSON.parse(lines[i])?.payload?.info;
+      const last = info?.last_token_usage;
+      const window = Number(info?.model_context_window);
+      if (last && window) {
+        const tokens = Number(last.total_tokens) || (Number(last.input_tokens) || 0) + (Number(last.output_tokens) || 0);
+        return { tokens, window, percent: Math.min(100, (tokens / window) * 100), model: "" };
+      }
+    } catch {}
+  }
+  return null;
+}
+
+async function claudeLive(rootPid, cwd) {
   const cache = liveCache.get(rootPid) || { cliPid: 0, lookupAt: 0 };
   liveCache.set(rootPid, cache);
   let data = cache.cliPid ? readClaudeProcessFile(cache.cliPid) : null;
@@ -231,26 +346,43 @@ async function claudeLive(rootPid) {
   if (!data) {
     return { state: null, runningVersion: "" };
   }
-  return { state: data.status === "busy" ? "busy" : "idle", runningVersion: String(data.version || "") };
+  // "waiting" : Claude attend l'utilisateur (autorisation, question...).
+  const state = data.status === "busy" ? "busy" : data.status === "waiting" ? "waiting" : "idle";
+  return {
+    state,
+    waitingFor: state === "waiting" ? String(data.waitingFor || "") : "",
+    runningVersion: String(data.version || ""),
+    conversationId: String(data.sessionId),
+    context: claudeContext(String(data.sessionId), data.cwd || cwd)
+  };
 }
 
 function codexLive(rootPid, cwd, startedAt) {
-  const cache = liveCache.get(rootPid) || { cliVersion: "", lookupAt: 0 };
+  const cache = liveCache.get(rootPid) || { cliVersion: "", file: "", lookupAt: 0 };
   liveCache.set(rootPid, cache);
-  if (!cache.cliVersion && Date.now() - cache.lookupAt > LOOKUP_RETRY_MS) {
+  if (!cache.file && Date.now() - cache.lookupAt > LOOKUP_RETRY_MS) {
     cache.lookupAt = Date.now();
-    cache.cliVersion = findCodexConversation(cwd, startedAt)?.cliVersion || "";
+    const found = findCodexConversation(cwd, startedAt);
+    cache.cliVersion = found?.cliVersion || "";
+    cache.file = found?.file || "";
+    cache.conversationId = found?.conversationId || "";
   }
   // Codex n'expose pas son etat : le renderer le deduit de l'activite du terminal.
-  return { state: null, runningVersion: cache.cliVersion };
+  return {
+    state: null,
+    runningVersion: cache.cliVersion,
+    conversationId: cache.conversationId || "",
+    context: cache.file ? codexContext(cache.file) : null
+  };
 }
 
-// Renvoie { state: "busy"|"idle"|null, runningVersion, installedVersion, updatePending }.
+// Renvoie { state: "busy"|"idle"|"waiting"|null, waitingFor, runningVersion,
+// installedVersion, updatePending, conversationId, context }.
 async function getLiveStatus({ profileId, pid, cwd, startedAt }) {
   let live = { state: null, runningVersion: "" };
   try {
     if (profileId === "claude" && pid) {
-      live = await claudeLive(Number(pid));
+      live = await claudeLive(Number(pid), cwd);
     } else if (profileId === "codex" && pid && cwd && startedAt) {
       live = codexLive(Number(pid), cwd, Number(startedAt));
     }
