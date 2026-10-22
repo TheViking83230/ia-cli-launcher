@@ -5014,10 +5014,7 @@ function handleUpdateStatus(payload) {
 // l'installateur Windows ou depuis ce bouton ; l'etat est garde par le
 // processus principal (src/main/jarvis.js).
 const JARVIS_SOUNDS = {
-  intro: "./jarvis/sounds/bonjour-jarvis.wav",
-  morning: "./jarvis/sounds/bonjour-jarvis.wav",
-  // Son du soir pas encore pret : vide = on reprend celui du matin.
-  evening: ""
+  intro: "./jarvis/sounds/bonjour-jarvis.wav"
 };
 // Video de la cinematique, a renseigner quand l'animation sera prete (ex.
 // "./jarvis/intro.mp4") ; vide = animation HUD generee en CSS.
@@ -5295,19 +5292,24 @@ async function initJarvis() {
     return;
   }
   jarvis.installed = saved.installed;
-  applyJarvisMode(saved.installed && saved.active && !saved.pendingIntro);
+  // Chaque demarrage se fait sur l'interface classique : JARVIS ne se relance
+  // que sur demande (bouton ou menu). Seule exception : la case cochee dans
+  // l'installateur, qui lance la cinematique une fois.
+  if (saved.active) {
+    await saveJarvis({ active: false });
+  }
+  applyJarvisMode(false);
   if (saved.pendingIntro) {
     activateJarvis();
-  } else if (jarvis.active) {
-    const hour = new Date().getHours();
-    const evening = hour < 5 || hour >= 18;
-    playJarvisSound((evening && JARVIS_SOUNDS.evening) || JARVIS_SOUNDS.morning);
   }
 }
 
 // Notes de version affichees apres une mise a jour. La cle est le numero de
 // version, la valeur la liste des nouveautes a montrer.
 const CHANGELOG = {
+  "0.1.23": [
+    "L'application démarre toujours sur l'interface classique, sans son : le module à réacteur ne se relance que lorsque tu le demandes."
+  ],
   "0.1.22": [
     "Coller une image dans la CLI : Ctrl+V (ou clic droit > Coller) avec une capture d'écran ou une image copiée l'envoie directement à l'IA, sans l'enregistrer toi-même dans un dossier.",
     "Fichiers copiés dans l'Explorateur : Ctrl+V colle leurs chemins dans la CLI.",
