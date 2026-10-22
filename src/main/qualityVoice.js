@@ -28,7 +28,7 @@ const ASR = {
   revision: "41f01f3fe87f28c78e2fbf8b568835947dd65ed9",
   files: ["*.json", "*.txt", "model.safetensors"]
 };
-const QUIET_MS = 30 * 60 * 1000;
+const QUIET_MS = 10 * 60 * 1000;
 // Etapes de l'installation : poids dans la barre de progression et, pour les
 // telechargements, dossier suivi (peu de fichiers : mesure rapide) et taille
 // attendue a la fin de l'etape (Go) ; sinon duree approximative.
@@ -408,6 +408,8 @@ function transcribe(wavBytes, prompt = "") {
     prepare();
     return Promise.resolve({ error: "Dictée précise pas encore prête." });
   }
+  clearTimeout(server.quietTimer);
+  server.quietTimer = setTimeout(stopServer, QUIET_MS);
   const id = server.nextId++;
   return new Promise((resolve) => {
     server.pending.set(id, { resolve, onChunk: () => {} });

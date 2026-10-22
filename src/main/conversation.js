@@ -482,9 +482,114 @@ async function getLastReply({ profileId, pid, cwd, startedAt }) {
   }
 }
 
+// --- Activite de l'IA (HUD de JARVIS) : dernieres actions de la session -----
+// Chaque action : { at, kind, label } ; kind = read | edit | run | search | web | agent | think | other.
+const CLAUDE_TOOLS = {
+  Read: ["read", (input) => `Lit ${baseName(input.file_path)}`],
+  Edit: ["edit", (input) => `Modifie ${baseName(input.file_path)}`],
+  MultiEdit: ["edit", (input) => `Modifie ${baseName(input.file_path)}`],
+  Write: ["edit", (input) => `Écrit ${baseName(input.file_path)}`],
+  NotebookEdit: ["edit", (input) => `Modifie ${baseName(input.notebook_path)}`],
+  Bash: ["run", (input) => `Exécute ${shorten(input.description || input.command)}`],
+  PowerShell: ["run", (input) => `Exécute ${shorten(input.description || input.command)}`],
+  Grep: ["search", (input) => `Cherche « ${shorten(input.pattern, 40)} »`],
+  Glob: ["search", (input) => `Cherche ${shorten(input.pattern, 40)}`],
+  WebSearch: ["web", (input) => `Recherche web : ${shorten(input.query)}`],
+  WebFetch: ["web", (input) => `Consulte ${shorten(input.url)}`],
+  Task: ["agent", (input) => `Délègue : ${shorten(input.description)}`],
+  Agent: ["agent", (input) => `Délègue : ${shorten(input.description)}`],
+  TodoWrite: ["think", () => "Met à jour sa liste de tâches"]
+};
+
+function baseName(file) {
+  return path.basename(String(file || "?"));
+}
+
+function shorten(text, max = 60) {
+  const value = String(text || "").replace(/\s+/g, " ").trim();
+  return value.length > max ? `${value.slice(0, max - 1)}…` : value;
+}
+
+function claudeActivity(file, limit) {
+  const actions = [];
+  for (const line of readTail(file, 512 * 1024).split("\n")) {
+    let entry;
+    try {
+      entry = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (entry.type !== "assistant" || entry.isSidechain || !Array.isArray(entry.message?.content)) {
+      continue;
+    }
+    const at = Date.parse(entry.timestamp) || 0;
+    for (const block of entry.message.content) {
+      if (block.type === "tool_use") {
+        const known = CLAUDE_TOOLS[block.name];
+        const name = String(block.name || "").replace(/^mcp__[^_]+__/, "");
+        actions.push(known ? { at, kind: known[0], label: known[1](block.input || {}) } : { at, kind: "other", label: `Outil ${name}` });
+      } else if (block.type === "thinking") {
+        actions.push({ at, kind: "think", label: "Réfléchit" });
+      } else if (block.type === "text" && block.text?.trim()) {
+        actions.push({ at, kind: "say", label: shorten(block.text, 80) });
+      }
+    }
+  }
+  return actions.slice(-limit);
+}
+
+function codexActivity(file, limit) {
+  const actions = [];
+  for (const line of readTail(file, 512 * 1024).split("\n")) {
+    let entry;
+    try {
+      entry = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    const payload = entry?.payload;
+    const at = Date.parse(entry?.timestamp) || 0;
+    if (payload?.type === "function_call" || payload?.type === "custom_tool_call" || payload?.type === "local_shell_call") {
+      let args = {};
+      try {
+        args = typeof payload.arguments === "string" ? JSON.parse(payload.arguments) : payload.arguments || payload.action || {};
+      } catch {}
+      const command = Array.isArray(args.command) ? args.command.slice(-1)[0] : args.command;
+      if (command) {
+        actions.push({ at, kind: "run", label: `Exécute ${shorten(command)}` });
+      } else if (/patch/i.test(payload.name || "")) {
+        actions.push({ at, kind: "edit", label: "Modifie des fichiers" });
+      } else {
+        actions.push({ at, kind: "other", label: `Outil ${payload.name || "?"}` });
+      }
+    } else if (payload?.type === "reasoning") {
+      actions.push({ at, kind: "think", label: "Réfléchit" });
+    } else if (payload?.type === "agent_message" && payload.message) {
+      actions.push({ at, kind: "say", label: shorten(payload.message, 80) });
+    }
+  }
+  return actions.slice(-limit);
+}
+
+async function getActivity({ profileId, pid, cwd, startedAt }, limit = 8) {
+  try {
+    if (profileId === "claude" && pid) {
+      const live = await claudeLive(Number(pid), cwd);
+      const file = live.conversationId && claudeConversationFile(live.conversationId, cwd);
+      return file ? claudeActivity(file, limit) : [];
+    }
+    if (profileId === "codex" && pid && cwd && startedAt) {
+      codexLive(Number(pid), cwd, Number(startedAt));
+      const file = liveCache.get(Number(pid))?.file;
+      return file ? codexActivity(file, limit) : [];
+    }
+  } catch {}
+  return [];
+}
+
 // Oubli du cache d'un terminal ferme.
 function forgetLive(pid) {
   liveCache.delete(Number(pid));
 }
 
-module.exports = { getConversationInfo, getLiveStatus, getLastReply, forgetLive };
+module.exports = { getConversationInfo, getLiveStatus, getLastReply, getActivity, forgetLive };

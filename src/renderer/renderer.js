@@ -5214,6 +5214,82 @@ function setJarvisCoreState(stateName, analyser = null) {
     core?.setState(stateName);
     core?.setAnalyser(analyser);
   }
+  jarvisHome?.setCoreState(stateName, analyser);
+}
+
+// --- Ecran JARVIS « reacteur au centre » (jarvis/hud.js) --------------------
+let jarvisHome = null;
+
+function isJarvisHomeShown() {
+  return Boolean(jarvisHome?.visible && jarvisHome.mode === "home");
+}
+
+// Reajuste les terminaux apres un changement de disposition.
+function refitTerminals() {
+  window.setTimeout(() => window.dispatchEvent(new Event("resize")), 60);
+}
+
+function createJarvisHome() {
+  return new window.JarvisHud({
+    sessions: () =>
+      [...state.sessions.values()]
+        .filter((session) => session.type === "terminal")
+        .map((session) => {
+          const profileId = sessionProfileId(session);
+          const profile = state.config?.profiles.find((item) => item.id === profileId);
+          return {
+            id: session.id,
+            title: session.title,
+            profileId: session.spec?.kind === "profile" ? profileId : "",
+            profile: getProfileLabel(profileId) || "Terminal",
+            accent: profile?.accent || session.accent,
+            aiState: session.spec?.kind === "profile" ? session.aiState || "idle" : "",
+            context: session.context,
+            cwd: session.cwd,
+            active: session.id === state.activeSessionId
+          };
+        }),
+    activity: (ids) => window.launcher.getActivity(ids),
+    stats: () => window.launcher.getSystemStats(),
+    usage: (profileId) => window.launcher.getUsage(profileId),
+    git: (cwd) => window.launcher.gitStatus(cwd),
+    focus: (id) => {
+      setActiveSession(id);
+      refitTerminals();
+      window.setTimeout(() => state.sessions.get(id)?.terminal?.focus(), 120);
+    },
+    newSession: () => {
+      jarvisHome.setMode("focus");
+      refitTerminals();
+      if (state.selectedFolder) {
+        elements.launchButton.click();
+      } else {
+        elements.chooseFolderButton.click();
+      }
+    },
+    listen: () => toggleJarvisDictation(),
+    sendText: (text, id) => {
+      const session = state.sessions.get(id);
+      if (!session) {
+        flashStatus("Lance d'abord une session d'IA.");
+        return false;
+      }
+      pasteToSession(session, text, true);
+      return true;
+    },
+    openSettings: () => openJarvisControls(),
+    exit: () => deactivateJarvis()
+  });
+}
+
+function showJarvisHome(active) {
+  if (active) {
+    jarvisHome ??= createJarvisHome();
+    jarvisHome.show();
+  } else if (jarvisHome) {
+    jarvisHome.hide();
+    refitTerminals();
+  }
 }
 
 function isJarvisAutoRead() {
@@ -5437,6 +5513,7 @@ async function speakJarvis(text) {
   if (!chunks.length) {
     return;
   }
+  jarvisHome?.addVoiceLine("JARVIS", textForSpeech(text, false).replace(/\s+/g, " ").slice(0, 220));
   jarvisVoice.speaking = true;
   showJarvisHud("JARVIS", chunks[0], true);
   setJarvisCoreState("thinking");
@@ -5686,6 +5763,11 @@ const jarvisHud = { element: null, core: null, hideTimer: null };
 // reacteur capte le clic).
 function showJarvisHud(stateText, text = "", passive = false) {
   window.clearTimeout(jarvisHud.hideTimer);
+  // Ecran JARVIS affiche : le reacteur central et ses sous-titres font office de HUD.
+  if (isJarvisHomeShown()) {
+    jarvisHome.setCaption(stateText, text);
+    return;
+  }
   if (!jarvisHud.element) {
     const hud = document.createElement("div");
     hud.className = "jarvis-hud";
@@ -5712,6 +5794,10 @@ function showJarvisHud(stateText, text = "", passive = false) {
 
 function hideJarvisHud(delay = 0) {
   window.clearTimeout(jarvisHud.hideTimer);
+  if (isJarvisHomeShown() && !jarvisHud.element) {
+    jarvisHud.hideTimer = window.setTimeout(() => jarvisHome.setCaption("EN VEILLE", ""), delay);
+    return;
+  }
   jarvisHud.hideTimer = window.setTimeout(() => {
     const { element, core } = jarvisHud;
     if (!element) {
@@ -6104,6 +6190,7 @@ function endJarvisCommand(message = "", delay = 1400) {
 
 function submitJarvisCommand(text, target) {
   jarvisLog(`demande : « ${text} »`);
+  jarvisHome?.addVoiceLine("Vous", text);
   if (!target) {
     endJarvisCommand("Ouvre un onglet d'IA pour me parler.", 2200);
     return;
@@ -6258,6 +6345,7 @@ function applyJarvisMode(active) {
   }
   updateJarvisButton();
   syncJarvisListener();
+  showJarvisHome(active);
 }
 
 function updateJarvisButton() {
@@ -6289,8 +6377,8 @@ function playJarvisIntro() {
           <circle class="ji-r2" cx="100" cy="100" r="78" />
           <circle class="ji-r3" cx="100" cy="100" r="62" />
           <circle class="ji-r4" cx="100" cy="100" r="44" />
-          <circle class="ji-core" cx="100" cy="100" r="22" />
         </svg>
+        <div class="ji-live"></div>
       </div>
       <div class="ji-title">J.A.R.V.I.S.</div>
       <div class="ji-sub">Just A Rather Very Intelligent System</div>
@@ -6306,6 +6394,21 @@ function playJarvisIntro() {
     }
 
     const audio = playJarvisSound(JARVIS_SOUNDS.intro);
+    // Reacteur vivant au centre : il reagit au son « Bonjour Jarvis ».
+    const reactor = overlay.querySelector(".ji-reactor");
+    const introCore = new window.JarvisCore(overlay.querySelector(".ji-live"), { size: Math.round(reactor.clientWidth * 0.5) });
+    introCore.setState("speaking");
+    try {
+      const ctx = jarvisAudioContext();
+      ctx.resume?.();
+      const analyser = ctx.createAnalyser();
+      analyser.fftSize = 256;
+      ctx.createMediaElementSource(audio).connect(analyser);
+      analyser.connect(ctx.destination);
+      introCore.setAnalyser(analyser);
+    } catch {
+      // son non analysable : le reacteur garde son animation de parole
+    }
     const log = overlay.querySelector(".ji-log");
     const lines = [
       "Initialisation des systèmes principaux",
@@ -6331,6 +6434,7 @@ function playJarvisIntro() {
       overlay.classList.add("ji-out");
       applyJarvisMode(true);
       window.setTimeout(() => {
+        introCore.destroy();
         overlay.remove();
         jarvis.playing = false;
         resolve();
@@ -7002,6 +7106,12 @@ async function initJarvis() {
 // Notes de version affichees apres une mise a jour. La cle est le numero de
 // version, la valeur la liste des nouveautes a montrer.
 const CHANGELOG = {
+  "0.1.30": [
+    "Le module à réacteur a une toute nouvelle interface plein écran façon film : réacteur au centre, systèmes du PC (processeur, mémoire, carte graphique), sessions et quotas, activité de l'IA en direct et journal vocal.",
+    "Un clic sur une session l'ouvre en gardant le bandeau du réacteur en haut ; une barre de commande permet d'écrire à l'IA sans quitter l'interface.",
+    "Le réacteur réagit au son pendant la cinématique de démarrage.",
+    "Interface optimisée pour solliciter peu la carte graphique, et la voix qualité libère sa mémoire après 10 minutes sans utilisation."
+  ],
   "0.1.29": [
     "Dictée bien plus précise : nouveau modèle de reconnaissance pour le texte des demandes, et vocabulaire technique reconnu (features, commit, build…).",
     "Avec une carte graphique NVIDIA : dictée encore plus précise et quasi instantanée, à ajouter d'un clic au pack de la voix qualité.",

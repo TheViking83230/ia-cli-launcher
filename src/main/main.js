@@ -17,6 +17,7 @@ const clipboardImage = require("./clipboardImage");
 const piper = require("./piper");
 const whisper = require("./whisper");
 const qualityVoice = require("./qualityVoice");
+const systemStats = require("./systemStats");
 
 // Sous Linux, certaines distributions recentes (Ubuntu 24.04+) bloquent les
 // "user namespaces" non privilegies : le sandbox Chromium ne peut alors pas
@@ -1077,6 +1078,24 @@ app.whenReady().then(() => {
       startedAt: session.startedAt
     });
   });
+
+  // HUD de JARVIS : dernieres actions de l'IA de chaque onglet, etat du PC.
+  ipcMain.handle("terminal:activity", async (_event, ids) => {
+    const result = {};
+    for (const id of ids || []) {
+      const session = sessions.get(id);
+      if (session) {
+        result[id] = await conversation.getActivity({
+          profileId: session.profileId,
+          pid: session.pty?.pid,
+          cwd: session.cwd,
+          startedAt: session.startedAt
+        });
+      }
+    }
+    return result;
+  });
+  ipcMain.handle("system:stats", () => systemStats.getStats());
 
   ipcMain.handle("config:get", () => readConfig());
   ipcMain.handle("config:save", (_event, config) => writeConfig(config));

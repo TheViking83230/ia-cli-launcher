@@ -132,6 +132,8 @@ def main():
         asr = load_asr(torch)
     except Exception as error:  # noqa: BLE001 - la voix reste utilisable sans la dictee precise
         print(f"dictee precise indisponible : {error}", flush=True)
+    # Rend a la carte la memoire des essais de demarrage (gardee en reserve sinon).
+    torch.cuda.empty_cache()
     print(f"voix qualite prete en {time.time() - start:.1f} s ({torch.cuda.get_device_name(0)}, dictee {'oui' if asr else 'non'})", flush=True)
     if asr:
         threading.Thread(target=asr_worker, args=(torch, asr), daemon=True).start()

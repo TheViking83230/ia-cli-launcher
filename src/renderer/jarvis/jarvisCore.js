@@ -58,8 +58,20 @@
       this.bins = analyser ? new Uint8Array(analyser.frequencyBinCount) : null;
     }
 
-    destroy() {
+    // Arret du dessin quand le reacteur n'est pas a l'ecran.
+    pause() {
       cancelAnimationFrame(this.raf);
+      this.raf = null;
+    }
+
+    resume() {
+      if (!this.raf) {
+        this.raf = requestAnimationFrame(this.frame);
+      }
+    }
+
+    destroy() {
+      this.pause();
       this.canvas.remove();
     }
 
@@ -100,6 +112,11 @@
     }
 
     frame(now) {
+      if (this.state === "idle" && now - (this.lastFrame || 0) < 30) {
+        this.raf = requestAnimationFrame(this.frame);
+        return;
+      }
+      this.lastFrame = now;
       const time = (now - this.start) / 1000;
       const { ctx, size } = this;
       const center = size / 2;

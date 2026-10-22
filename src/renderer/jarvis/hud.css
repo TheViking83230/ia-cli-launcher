@@ -1,0 +1,831 @@
+/* Interface JARVIS « reacteur au centre » (jarvis/hud.js). */
+.jh2 {
+  --cyan: #38e8ff;
+  --cyan-soft: rgba(56, 232, 255, 0.55);
+  --cyan-faint: rgba(56, 232, 255, 0.14);
+  --amber: #ffb347;
+  --bg: #02080f;
+  --top-h: 56px;
+  position: fixed;
+  inset: 0;
+  z-index: 90; /* sous les fenetres (100+) et la cinematique */
+  display: grid;
+  grid-template-columns: minmax(230px, 22vw) 1fr minmax(250px, 23vw);
+  grid-template-rows: var(--top-h) 1fr minmax(150px, 24vh);
+  grid-template-areas:
+    "top top top"
+    "left center right"
+    "bottom bottom bottom";
+  gap: 14px 18px;
+  padding: 0 18px 16px;
+  background: radial-gradient(ellipse at 50% 45%, #06233a 0%, #031321 38%, var(--bg) 75%);
+  color: #cdf6ff;
+  font-family: "Segoe UI", "Rajdhani", system-ui, sans-serif;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.45s ease;
+  overflow: hidden;
+  user-select: none;
+}
+
+.jh2.visible {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.jh2-backdrop,
+.jh2-particles,
+.jh2-scanlines,
+.jh2-vignette {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+/* Balayage radar : simple rotation (composee par la carte, sans redessin). */
+.jh2-sweep {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 160vmax;
+  height: 160vmax;
+  margin: -80vmax 0 0 -80vmax;
+  pointer-events: none;
+  background: conic-gradient(from 0deg, rgba(56, 232, 255, 0.07), rgba(56, 232, 255, 0) 8%, rgba(56, 232, 255, 0) 100%);
+  border-radius: 50%;
+  will-change: transform;
+  animation: jh2-spin 8s linear infinite;
+}
+
+.jh2-scanlines {
+  background: repeating-linear-gradient(to bottom, rgba(56, 232, 255, 0.03) 0 1px, transparent 1px 3px);
+}
+
+.jh2-vignette {
+  background: radial-gradient(ellipse at center, transparent 55%, rgba(0, 0, 0, 0.65) 100%);
+}
+
+/* --- Bandeau du haut --- */
+.jh2-top {
+  grid-area: top;
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 22px;
+  border-bottom: 1px solid var(--cyan-faint);
+  z-index: 2;
+}
+
+.jh2-top::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  bottom: -1px;
+  width: 22%;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, var(--cyan), transparent);
+  animation: jh2-slide 5s linear infinite;
+}
+
+@keyframes jh2-slide {
+  from { transform: translateX(-100%); }
+  to { transform: translateX(460%); }
+}
+
+.jh2-brand {
+  display: grid;
+}
+
+.jh2-logo {
+  color: var(--cyan);
+  font-size: 20px;
+  font-weight: 700;
+  letter-spacing: 0.32em;
+  text-shadow: 0 0 12px var(--cyan-soft);
+}
+
+.jh2-tagline {
+  color: rgba(205, 246, 255, 0.45);
+  font-size: 10px;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+}
+
+.jh2-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #7dffc8;
+  font-size: 11px;
+  letter-spacing: 0.2em;
+}
+
+.jh2-status i {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #4dffb2;
+  box-shadow: 0 0 10px #4dffb2;
+  animation: jh2-pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes jh2-pulse {
+  50% { opacity: 0.35; transform: scale(0.8); }
+}
+
+.jh2-clock {
+  margin-left: auto;
+  display: grid;
+  justify-items: end;
+}
+
+.jh2-clock strong {
+  color: var(--cyan);
+  font-size: 22px;
+  font-weight: 300;
+  letter-spacing: 0.12em;
+  font-variant-numeric: tabular-nums;
+  text-shadow: 0 0 10px var(--cyan-soft);
+}
+
+.jh2-clock span {
+  color: rgba(205, 246, 255, 0.5);
+  font-size: 10px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+}
+
+.jh2-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.jh2-btn {
+  min-width: 34px;
+  height: 30px;
+  padding: 0 10px;
+  border: 1px solid var(--cyan-faint);
+  background: rgba(56, 232, 255, 0.05);
+  color: var(--cyan);
+  font-size: 13px;
+  letter-spacing: 0.1em;
+  cursor: pointer;
+  clip-path: polygon(6px 0, 100% 0, 100% calc(100% - 6px), calc(100% - 6px) 100%, 0 100%, 0 6px);
+  transition: background 0.2s, box-shadow 0.2s;
+}
+
+.jh2-btn:hover {
+  background: rgba(56, 232, 255, 0.18);
+  box-shadow: inset 0 0 12px rgba(56, 232, 255, 0.35);
+}
+
+.jh2-btn.off {
+  opacity: 0.45;
+}
+
+.jh2-home-btn,
+.jh2-mini-core {
+  display: none;
+}
+
+/* --- Panneaux holographiques --- */
+.jh2-left,
+.jh2-right,
+.jh2-bottom,
+.jh2-center {
+  position: relative;
+  z-index: 1;
+  min-height: 0;
+}
+
+.jh2-left {
+  grid-area: left;
+  display: grid;
+  grid-template-rows: auto 1fr;
+  gap: 14px;
+}
+
+.jh2-right {
+  grid-area: right;
+  display: grid;
+}
+
+.jh2-bottom {
+  grid-area: bottom;
+  display: grid;
+  grid-template-columns: 1.4fr 1fr;
+  gap: 18px;
+}
+
+.jh2-panel {
+  position: relative;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 12px 14px;
+  background: linear-gradient(160deg, rgba(10, 45, 70, 0.55), rgba(3, 18, 30, 0.55));
+  border: 1px solid var(--cyan-faint);
+  clip-path: polygon(14px 0, 100% 0, 100% calc(100% - 14px), calc(100% - 14px) 100%, 0 100%, 0 14px);
+  overflow: hidden;
+}
+
+/* Coins lumineux et ligne de balayage. */
+.jh2-panel::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background:
+    linear-gradient(var(--cyan), var(--cyan)) top left / 26px 2px no-repeat,
+    linear-gradient(var(--cyan), var(--cyan)) top left / 2px 26px no-repeat,
+    linear-gradient(var(--cyan), var(--cyan)) bottom right / 26px 2px no-repeat,
+    linear-gradient(var(--cyan), var(--cyan)) bottom right / 2px 26px no-repeat;
+  opacity: 0.8;
+}
+
+.jh2-panel::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  height: 40%;
+  pointer-events: none;
+  background: linear-gradient(to bottom, transparent, rgba(56, 232, 255, 0.06), transparent);
+  will-change: transform;
+  animation: jh2-scan 7s linear infinite;
+}
+
+@keyframes jh2-scan {
+  from { transform: translateY(-100%); }
+  to { transform: translateY(260%); }
+}
+
+.jh2-panel h3 {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0 0 10px;
+  color: var(--cyan);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.26em;
+}
+
+.jh2-panel h3::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  background: var(--cyan);
+  box-shadow: 0 0 8px var(--cyan);
+  transform: rotate(45deg);
+}
+
+.jh2-panel h3 em {
+  margin-left: auto;
+  color: rgba(205, 246, 255, 0.4);
+  font-size: 10px;
+  font-style: normal;
+  letter-spacing: 0.12em;
+}
+
+.jh2-empty {
+  color: rgba(205, 246, 255, 0.4);
+  font-size: 12px;
+  font-style: italic;
+  list-style: none;
+}
+
+/* Systemes */
+.jh2-metrics {
+  display: grid;
+  gap: 10px;
+}
+
+.jh2-metric-head {
+  display: flex;
+  justify-content: space-between;
+  font-size: 10px;
+  letter-spacing: 0.18em;
+  color: rgba(205, 246, 255, 0.65);
+}
+
+.jh2-metric-head strong {
+  color: var(--cyan);
+  font-size: 15px;
+  font-weight: 400;
+  letter-spacing: 0.05em;
+  font-variant-numeric: tabular-nums;
+}
+
+.jh2-metric canvas {
+  display: block;
+  width: 100%;
+  height: 30px;
+  margin: 3px 0 2px;
+}
+
+.jh2-metric small {
+  color: rgba(205, 246, 255, 0.4);
+  font-size: 10px;
+}
+
+.jh2-metric.hot strong {
+  color: var(--amber);
+  text-shadow: 0 0 8px rgba(255, 179, 71, 0.6);
+}
+
+/* Quotas */
+.jh2-quota-list {
+  display: grid;
+  gap: 12px;
+  overflow: auto;
+}
+
+.jh2-quota strong {
+  display: block;
+  margin-bottom: 4px;
+  color: var(--accent);
+  font-size: 12px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.jh2-quota small {
+  color: rgba(205, 246, 255, 0.4);
+  font-size: 11px;
+}
+
+.jh2-quota-row {
+  display: grid;
+  grid-template-columns: 70px 1fr 40px;
+  align-items: center;
+  gap: 8px;
+  font-size: 10px;
+  color: rgba(205, 246, 255, 0.65);
+}
+
+.jh2-quota-row em {
+  font-style: normal;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.jh2-gauge {
+  height: 5px;
+  background: rgba(56, 232, 255, 0.1);
+  overflow: hidden;
+}
+
+.jh2-gauge b {
+  display: block;
+  height: 100%;
+  background: linear-gradient(90deg, var(--cyan), #9ff6ff);
+  box-shadow: 0 0 8px var(--cyan);
+  transition: width 0.8s ease;
+}
+
+.jh2-quota-row.hot b {
+  background: linear-gradient(90deg, var(--amber), #ffd58c);
+  box-shadow: 0 0 8px var(--amber);
+}
+
+/* Sessions */
+.jh2-sessions h3 .jh2-new {
+  margin-left: auto;
+  width: 24px;
+  height: 22px;
+  border: 1px solid var(--cyan-faint);
+  background: transparent;
+  color: var(--cyan);
+  cursor: pointer;
+}
+
+.jh2-session-list {
+  display: grid;
+  align-content: start;
+  gap: 8px;
+  overflow: auto;
+}
+
+.jh2-session {
+  position: relative;
+  display: grid;
+  grid-template-columns: 10px 1fr auto;
+  align-items: center;
+  gap: 4px 10px;
+  padding: 9px 10px 11px;
+  border: 1px solid rgba(56, 232, 255, 0.12);
+  border-left: 2px solid var(--accent);
+  background: rgba(56, 232, 255, 0.04);
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.2s, transform 0.2s;
+}
+
+.jh2-session:hover {
+  background: rgba(56, 232, 255, 0.12);
+  transform: translateX(-3px);
+}
+
+.jh2-session.active {
+  box-shadow: inset 0 0 18px rgba(56, 232, 255, 0.12);
+}
+
+.jh2-session > i {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: rgba(205, 246, 255, 0.3);
+}
+
+.jh2-session[data-state="busy"] > i {
+  background: var(--cyan);
+  box-shadow: 0 0 10px var(--cyan);
+  animation: jh2-pulse 0.9s ease-in-out infinite;
+}
+
+.jh2-session[data-state="waiting"] > i {
+  background: var(--amber);
+  box-shadow: 0 0 10px var(--amber);
+  animation: jh2-pulse 0.6s ease-in-out infinite;
+}
+
+.jh2-session strong {
+  display: block;
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.jh2-session span {
+  color: var(--accent);
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.jh2-session-meta {
+  display: grid;
+  justify-items: end;
+  gap: 2px;
+}
+
+.jh2-session-meta em {
+  color: rgba(205, 246, 255, 0.55);
+  font-size: 9px;
+  font-style: normal;
+  letter-spacing: 0.16em;
+}
+
+.jh2-session[data-state="waiting"] .jh2-session-meta em {
+  color: var(--amber);
+}
+
+.jh2-session-meta small {
+  color: rgba(205, 246, 255, 0.4);
+  font-size: 10px;
+}
+
+.jh2-session-ctx {
+  position: absolute;
+  left: 10px;
+  right: 10px;
+  bottom: 3px;
+  height: 2px;
+  background: rgba(56, 232, 255, 0.08);
+}
+
+.jh2-session-ctx b {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+  opacity: 0.7;
+}
+
+/* Activite et journal */
+.jh2-activity-list,
+.jh2-journal-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  align-content: end;
+  gap: 4px;
+  overflow: hidden;
+  font-size: 12px;
+}
+
+.jh2-activity-list li {
+  display: grid;
+  grid-template-columns: 18px minmax(70px, 140px) 1fr auto;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 6px;
+  border-left: 2px solid var(--accent);
+  background: linear-gradient(90deg, rgba(56, 232, 255, 0.07), transparent 70%);
+}
+
+.jh2-activity-list i {
+  color: var(--cyan);
+  font-style: normal;
+  text-align: center;
+}
+
+.jh2-activity-list .kind-edit i { color: #ffd166; }
+.jh2-activity-list .kind-run i { color: #7dffc8; }
+.jh2-activity-list .kind-web i { color: #b69cff; }
+
+.jh2-activity-list b,
+.jh2-journal-list b {
+  color: var(--accent, var(--cyan));
+  font-weight: 600;
+  font-size: 11px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.jh2-activity-list span,
+.jh2-journal-list span {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: rgba(205, 246, 255, 0.85);
+}
+
+.jh2-activity-list time,
+.jh2-journal-list time {
+  color: rgba(205, 246, 255, 0.35);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+
+.jh2-journal-list {
+  overflow: auto;
+}
+
+.jh2-journal-list li {
+  display: grid;
+  grid-template-columns: 54px 1fr auto;
+  gap: 8px;
+  padding: 3px 6px;
+}
+
+.jh2-journal-list li.jarvis b {
+  color: var(--cyan);
+}
+
+.jh2-journal-list li.user b {
+  color: #9ff6c8;
+}
+
+li.enter,
+.jh2-session.enter {
+  animation: jh2-glitch-in 0.5s ease-out;
+}
+
+@keyframes jh2-glitch-in {
+  0% { opacity: 0; transform: translateX(-12px); filter: blur(3px); }
+  30% { opacity: 1; transform: translateX(4px); clip-path: inset(0 0 60% 0); }
+  45% { clip-path: inset(40% 0 0 0); transform: translateX(-2px); }
+  60% { clip-path: none; }
+  100% { transform: none; filter: none; }
+}
+
+/* --- Centre : reacteur, anneaux, sous-titres --- */
+.jh2-center {
+  grid-area: center;
+  display: grid;
+  grid-template-rows: 1fr auto auto auto;
+  justify-items: center;
+  align-items: center;
+  gap: 8px;
+}
+
+.jh2-rings {
+  position: relative;
+  width: min(62vh, 36vw, 560px);
+  aspect-ratio: 1;
+  display: grid;
+  place-items: center;
+}
+
+.jh2-ring {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+  transform-origin: 50% 50%;
+  will-change: transform;
+  fill: none;
+  stroke: var(--cyan);
+}
+
+.jh2-ring.r1 { stroke-width: 1; stroke-dasharray: 2 8; opacity: 0.5; animation: jh2-spin 60s linear infinite; }
+.jh2-ring.r2 { stroke-width: 3; stroke-dasharray: 120 30 8 30; opacity: 0.35; animation: jh2-spin 28s linear infinite reverse; }
+.jh2-ring.r3 { animation: jh2-spin 90s linear infinite; }
+.jh2-ring.r3 text { fill: rgba(56, 232, 255, 0.45); stroke: none; font-size: 13px; letter-spacing: 6px; }
+.jh2-ring.r4 { stroke-width: 1; opacity: 0.25; stroke-dasharray: 40 6; animation: jh2-spin 40s linear infinite reverse; }
+.jh2-ring.r5 { stroke-width: 6; opacity: 0.18; stroke-dasharray: 3 9; animation: jh2-spin 20s linear infinite; }
+
+.jh2[data-state="listening"] .jh2-ring.r2,
+.jh2[data-state="speaking"] .jh2-ring.r2 { opacity: 0.7; animation-duration: 8s; }
+.jh2[data-state="thinking"] .jh2-ring.r5 { opacity: 0.55; animation-duration: 3s; }
+.jh2[data-state="thinking"] .jh2-ring.r4 { opacity: 0.6; animation-duration: 6s; }
+
+@keyframes jh2-spin {
+  to { transform: rotate(360deg); }
+}
+
+.jh2-core {
+  position: relative;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(56, 232, 255, 0.16) 0%, rgba(56, 232, 255, 0) 62%);
+}
+
+.jh2-state {
+  color: var(--cyan);
+  font-size: 12px;
+  letter-spacing: 0.4em;
+  text-shadow: 0 0 10px var(--cyan-soft);
+  text-transform: uppercase;
+}
+
+.jh2-caption {
+  max-width: min(760px, 90%);
+  min-height: 2.8em;
+  color: #effcff;
+  font-size: 17px;
+  line-height: 1.4;
+  text-align: center;
+  text-shadow: 0 0 14px rgba(56, 232, 255, 0.45);
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.jh2-command {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: min(720px, 94%);
+  padding: 6px 8px;
+  border: 1px solid var(--cyan-faint);
+  background: rgba(3, 20, 32, 0.75);
+  clip-path: polygon(10px 0, 100% 0, 100% calc(100% - 10px), calc(100% - 10px) 100%, 0 100%, 0 10px);
+}
+
+.jh2-command:focus-within {
+  border-color: var(--cyan-soft);
+  box-shadow: 0 0 20px rgba(56, 232, 255, 0.15);
+}
+
+.jh2-command input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: #effcff;
+  font: inherit;
+  font-size: 14px;
+}
+
+.jh2-command input::placeholder {
+  color: rgba(205, 246, 255, 0.35);
+}
+
+.jh2-mic {
+  width: 32px;
+  height: 32px;
+  border: 1px solid var(--cyan-soft);
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(56, 232, 255, 0.35), transparent 70%);
+  color: var(--cyan);
+  cursor: pointer;
+}
+
+.jh2[data-state="listening"] .jh2-mic {
+  box-shadow: 0 0 16px var(--cyan);
+  animation: jh2-pulse 1s ease-in-out infinite;
+}
+
+.jh2-target {
+  max-width: 180px;
+  border: 1px solid var(--cyan-faint);
+  background: rgba(3, 20, 32, 0.9);
+  color: var(--cyan);
+  font-size: 12px;
+}
+
+/* --- Demarrage --- */
+.jh2-boot {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  z-index: 5;
+  transform: translate(-50%, -50%);
+  display: none;
+  color: var(--cyan);
+  font-family: Consolas, "Cascadia Mono", monospace;
+  font-size: 13px;
+  letter-spacing: 0.12em;
+  text-shadow: 0 0 8px var(--cyan-soft);
+}
+
+.jh2-boot.running {
+  display: grid;
+  gap: 4px;
+}
+
+.jh2-boot-line {
+  animation: jh2-glitch-in 0.3s ease-out;
+}
+
+.jh2.booting .jh2-left,
+.jh2.booting .jh2-right,
+.jh2.booting .jh2-bottom,
+.jh2.booting .jh2-center {
+  opacity: 0;
+}
+
+.jh2 .jh2-left,
+.jh2 .jh2-right,
+.jh2 .jh2-bottom,
+.jh2 .jh2-center {
+  transition: opacity 0.6s ease, transform 0.6s ease;
+}
+
+.jh2 .jh2-left { transition-delay: 0.05s; }
+.jh2 .jh2-right { transition-delay: 0.15s; }
+.jh2 .jh2-bottom { transition-delay: 0.25s; }
+
+.jh2.booting .jh2-left { transform: translateX(-40px); }
+.jh2.booting .jh2-right { transform: translateX(40px); }
+.jh2.booting .jh2-bottom { transform: translateY(40px); }
+.jh2.booting .jh2-center { transform: scale(0.9); }
+
+/* --- Mode terminal en grand : le HUD se replie en bandeau --- */
+.jh2.focus {
+  bottom: auto;
+  height: var(--top-h);
+  grid-template-rows: var(--top-h);
+  grid-template-areas: "top top top";
+  padding-left: 64px;
+  background: linear-gradient(180deg, #041a2b, #020c16);
+  box-shadow: 0 2px 24px rgba(56, 232, 255, 0.12);
+}
+
+.jh2.focus .jh2-left,
+.jh2.focus .jh2-right,
+.jh2.focus .jh2-bottom,
+.jh2.focus .jh2-center,
+.jh2.focus .jh2-boot,
+.jh2.focus .jh2-backdrop,
+.jh2.focus .jh2-particles,
+.jh2.focus .jh2-sweep,
+.jh2.focus .jh2-scanlines,
+.jh2.focus .jh2-vignette {
+  display: none;
+}
+
+.jh2.focus .jh2-home-btn {
+  display: inline-block;
+}
+
+.jh2.focus .jh2-mini-core {
+  display: block;
+  position: absolute;
+  left: 16px;
+  top: 11px;
+  cursor: pointer;
+  z-index: 3;
+}
+
+body.jarvis-hud-on:not(.jarvis-hud-focus) #appShell {
+  visibility: hidden;
+}
+
+body.jarvis-hud-focus #appShell {
+  position: fixed;
+  inset: 56px 0 0 0;
+  height: auto;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .jh2 *,
+  .jh2 *::before,
+  .jh2 *::after {
+    animation: none !important;
+  }
+}
