@@ -2542,3 +2542,566 @@ select:focus {
   opacity: 0.45;
   cursor: not-allowed;
 }
+
+/* --- JARVIS (easter egg) ---------------------------------------------------- */
+
+/* Bouton : discret dans l'interface classique (reacteur grise), il s'allume
+   au survol et brille quand JARVIS est en ligne. */
+.jarvis-button .arc-reactor {
+  width: 22px;
+  height: 22px;
+  overflow: visible;
+  fill: none;
+}
+
+.jarvis-button .arc-ring {
+  stroke: var(--soft);
+  stroke-width: 1.4;
+  transition: stroke 0.25s ease;
+}
+
+.jarvis-button .arc-segments {
+  stroke: var(--soft);
+  stroke-width: 3;
+  stroke-dasharray: 4.4 2.8;
+  transform-origin: 16px 16px;
+  transition: stroke 0.25s ease;
+}
+
+.jarvis-button .arc-core {
+  fill: var(--soft);
+  transition: fill 0.25s ease, filter 0.25s ease;
+}
+
+.jarvis-button:hover .arc-ring,
+.jarvis-button:hover .arc-segments,
+.jarvis-button.on .arc-ring,
+.jarvis-button.on .arc-segments {
+  stroke: #38e8ff;
+}
+
+.jarvis-button:hover .arc-core,
+.jarvis-button.on .arc-core {
+  fill: #b8f6ff;
+  filter: drop-shadow(0 0 3px #38e8ff) drop-shadow(0 0 6px #38e8ff);
+}
+
+.jarvis-button:hover .arc-segments,
+.jarvis-button.on .arc-segments {
+  animation: arc-spin 6s linear infinite;
+}
+
+.jarvis-button.on {
+  border-color: rgba(56, 232, 255, 0.55);
+  box-shadow: 0 0 10px rgba(56, 232, 255, 0.25), inset 0 0 8px rgba(56, 232, 255, 0.15);
+}
+
+.jarvis-button.on .arc-core {
+  animation: arc-pulse 2.4s ease-in-out infinite;
+}
+
+@keyframes arc-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes arc-pulse {
+  50% {
+    filter: drop-shadow(0 0 1px #38e8ff) drop-shadow(0 0 3px #38e8ff);
+  }
+}
+
+/* Fenetres JARVIS (installation / reglages). */
+.jarvis-dialog {
+  border-color: rgba(56, 232, 255, 0.45);
+  background: linear-gradient(180deg, #071824 0%, #050e16 100%);
+  box-shadow: 0 0 0 1px rgba(56, 232, 255, 0.12), 0 0 40px rgba(56, 232, 255, 0.18), 0 24px 60px rgba(0, 0, 0, 0.6);
+}
+
+.jarvis-dialog .changelog-header {
+  color: #bff7ff;
+  font-family: Bahnschrift, "Segoe UI", sans-serif;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+}
+
+.jarvis-dialog .changelog-header svg {
+  color: #38e8ff;
+}
+
+.jarvis-dialog .changelog-body p {
+  margin: 0 0 10px;
+  color: #a8d8e6;
+  line-height: 1.5;
+}
+
+.jarvis-dialog .primary-button {
+  background: linear-gradient(90deg, #0fb5d6, #38e8ff);
+  color: #021018;
+}
+
+.jarvis-install-progress {
+  height: 4px;
+  margin-top: 6px;
+  overflow: hidden;
+  border-radius: 2px;
+  background: rgba(56, 232, 255, 0.12);
+}
+
+.jarvis-install-progress.hidden {
+  display: none;
+}
+
+.jarvis-install-progress span {
+  display: block;
+  height: 100%;
+  width: 0;
+  background: #38e8ff;
+  box-shadow: 0 0 8px #38e8ff;
+  animation: jarvis-fill 1.5s ease-in-out forwards;
+}
+
+@keyframes jarvis-fill {
+  to {
+    width: 100%;
+  }
+}
+
+/* Cinematique d'ouverture. */
+.jarvis-intro {
+  --ji-duration: 8000ms;
+  position: fixed;
+  inset: 0;
+  z-index: 500;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  background: radial-gradient(circle at 50% 45%, #06263a 0%, #020a12 55%, #000 100%);
+  color: #bff7ff;
+  font-family: Bahnschrift, "Segoe UI", sans-serif;
+  cursor: pointer;
+  animation: ji-fade-in 0.6s ease both;
+}
+
+.ji-grid {
+  position: absolute;
+  inset: -50%;
+  background-image:
+    linear-gradient(rgba(56, 232, 255, 0.07) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(56, 232, 255, 0.07) 1px, transparent 1px);
+  background-size: 48px 48px;
+  transform: perspective(600px) rotateX(58deg) translateY(10%);
+  animation: ji-grid 4s linear infinite;
+}
+
+.ji-video {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.ji-reactor {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: min(46vh, 380px);
+  height: min(46vh, 380px);
+  margin: calc(min(46vh, 380px) / -2 - 6vh) 0 0 calc(min(46vh, 380px) / -2);
+  filter: drop-shadow(0 0 12px rgba(56, 232, 255, 0.6));
+}
+
+.ji-reactor svg {
+  width: 100%;
+  height: 100%;
+  fill: none;
+  stroke: #38e8ff;
+}
+
+.ji-reactor circle {
+  transform-origin: 100px 100px;
+  opacity: 0;
+}
+
+.ji-run .ji-reactor circle {
+  animation: ji-ring-in 0.9s ease forwards, arc-spin linear infinite;
+}
+
+.ji-r1 {
+  stroke-width: 1;
+  stroke-dasharray: 2 6;
+  animation-duration: 0.9s, 30s !important;
+}
+
+.ji-r2 {
+  stroke-width: 6;
+  stroke-dasharray: 60 18 8 18;
+  stroke-opacity: 0.85;
+  animation-delay: 0.3s, 0s !important;
+  animation-duration: 0.9s, 14s !important;
+  animation-direction: normal, reverse !important;
+}
+
+.ji-r3 {
+  stroke-width: 2;
+  stroke-dasharray: 24 10;
+  animation-delay: 0.6s, 0s !important;
+  animation-duration: 0.9s, 9s !important;
+}
+
+.ji-r4 {
+  stroke-width: 10;
+  stroke-dasharray: 18 5;
+  stroke-opacity: 0.7;
+  animation-delay: 0.9s, 0s !important;
+  animation-duration: 0.9s, 6s !important;
+  animation-direction: normal, reverse !important;
+}
+
+.ji-run .ji-core {
+  fill: #dffbff;
+  stroke: none;
+  filter: drop-shadow(0 0 10px #38e8ff) drop-shadow(0 0 24px #38e8ff);
+  animation: ji-ring-in 0.9s ease 1.2s forwards, ji-core 2.2s ease-in-out 2.1s infinite !important;
+}
+
+.ji-title,
+.ji-sub,
+.ji-log,
+.ji-bar,
+.ji-skip {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+}
+
+.ji-title {
+  top: calc(50% + min(23vh, 190px) - 2vh);
+  font-size: clamp(28px, 5vw, 54px);
+  font-weight: 300;
+  letter-spacing: 0.5em;
+  padding-left: 0.5em;
+  text-shadow: 0 0 18px rgba(56, 232, 255, 0.8);
+  opacity: 0;
+}
+
+.ji-run .ji-title {
+  animation: ji-title 1.6s ease 1.4s forwards;
+}
+
+.ji-sub {
+  top: calc(50% + min(23vh, 190px) + 6vh);
+  color: #6fc6db;
+  font-size: 12px;
+  letter-spacing: 0.35em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  opacity: 0;
+}
+
+.ji-run .ji-sub {
+  animation: ji-fade-in 1s ease 2.4s forwards;
+}
+
+.ji-log {
+  top: 6vh;
+  left: 4vw;
+  transform: none;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-family: "Cascadia Mono", Consolas, monospace;
+  font-size: 12px;
+  color: #7fd9ec;
+}
+
+.ji-log li {
+  display: flex;
+  gap: 14px;
+  justify-content: space-between;
+  min-width: 320px;
+  padding: 3px 0;
+  border-bottom: 1px solid rgba(56, 232, 255, 0.12);
+  animation: ji-log 0.35s ease both;
+}
+
+.ji-log li::before {
+  content: "›";
+  color: #38e8ff;
+}
+
+.ji-log li span {
+  flex: 1;
+}
+
+.ji-log li b {
+  color: #38e8ff;
+  font-weight: 600;
+}
+
+.ji-bar {
+  bottom: 9vh;
+  width: min(420px, 70vw);
+  height: 2px;
+  background: rgba(56, 232, 255, 0.15);
+}
+
+.ji-bar span {
+  display: block;
+  width: 0;
+  height: 100%;
+  background: #38e8ff;
+  box-shadow: 0 0 10px #38e8ff;
+}
+
+.ji-run .ji-bar span {
+  animation: jarvis-fill var(--ji-duration) linear forwards;
+}
+
+.ji-skip {
+  bottom: 4vh;
+  color: rgba(127, 217, 236, 0.5);
+  font-size: 11px;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+}
+
+.jarvis-intro.ji-out {
+  animation: ji-out 0.9s ease forwards;
+}
+
+@keyframes ji-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes ji-grid {
+  to {
+    background-position: 0 48px;
+  }
+}
+
+@keyframes ji-ring-in {
+  from {
+    opacity: 0;
+    transform: scale(0.6);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes ji-core {
+  50% {
+    filter: drop-shadow(0 0 4px #38e8ff) drop-shadow(0 0 12px #38e8ff);
+  }
+}
+
+@keyframes ji-title {
+  from {
+    opacity: 0;
+    letter-spacing: 1.2em;
+  }
+  to {
+    opacity: 1;
+    letter-spacing: 0.5em;
+  }
+}
+
+@keyframes ji-log {
+  from {
+    opacity: 0;
+    transform: translateX(-12px);
+  }
+}
+
+@keyframes ji-out {
+  0% {
+    opacity: 1;
+    filter: brightness(1);
+  }
+  25% {
+    opacity: 1;
+    filter: brightness(3);
+  }
+  100% {
+    opacity: 0;
+    filter: brightness(1);
+  }
+}
+
+/* Interface JARVIS : premiere version du theme (HUD cyan). */
+body.jarvis {
+  --bg: #030b12;
+  --panel: #06141e;
+  --panel-strong: #0a2130;
+  --line: rgba(56, 232, 255, 0.2);
+  --text: #dcf8ff;
+  --muted: #8cc4d4;
+  --soft: #5a8ea0;
+  --accent: #38e8ff;
+  --accent-strong: #0fb5d6;
+  --terminal: #02090f;
+  font-family: Bahnschrift, "Segoe UI", system-ui, sans-serif;
+  background:
+    radial-gradient(circle at 80% -10%, rgba(56, 232, 255, 0.12), transparent 45%),
+    radial-gradient(circle at 0% 110%, rgba(56, 232, 255, 0.08), transparent 40%),
+    var(--bg);
+}
+
+body.jarvis .shell {
+  background: transparent;
+}
+
+/* Lignes de balayage tres legeres sur toute la fenetre. */
+body.jarvis::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  pointer-events: none;
+  background: repeating-linear-gradient(0deg, rgba(56, 232, 255, 0.025) 0 1px, transparent 1px 3px);
+}
+
+body.jarvis .sidebar,
+body.jarvis .tabs,
+body.jarvis .footer {
+  background: rgba(4, 16, 24, 0.92);
+}
+
+body.jarvis .topbar {
+  position: relative;
+  background: rgba(3, 11, 18, 0.85);
+  border-bottom-color: rgba(56, 232, 255, 0.35);
+  box-shadow: 0 1px 12px rgba(56, 232, 255, 0.12);
+}
+
+body.jarvis .brand-mark {
+  border-color: rgba(56, 232, 255, 0.5);
+  background: #06141e;
+  box-shadow: 0 0 12px rgba(56, 232, 255, 0.25);
+}
+
+body.jarvis .brand h1 {
+  color: #bff7ff;
+  font-weight: 400;
+  letter-spacing: 0.22em;
+  text-shadow: 0 0 10px rgba(56, 232, 255, 0.6);
+}
+
+body.jarvis .section-title,
+body.jarvis .eyebrow {
+  color: #6fd3ea;
+  letter-spacing: 0.16em;
+}
+
+body.jarvis .section-title svg {
+  color: #38e8ff;
+}
+
+body.jarvis .panel {
+  border-top-color: rgba(56, 232, 255, 0.25);
+}
+
+body.jarvis input,
+body.jarvis select,
+body.jarvis .ghost-button,
+body.jarvis .icon-button,
+body.jarvis .tiny-button {
+  border-color: rgba(56, 232, 255, 0.22);
+  background: rgba(3, 14, 22, 0.9);
+}
+
+body.jarvis input:focus,
+body.jarvis select:focus {
+  border-color: #38e8ff;
+  box-shadow: 0 0 0 3px rgba(56, 232, 255, 0.15), 0 0 12px rgba(56, 232, 255, 0.2);
+}
+
+body.jarvis .ghost-button:hover,
+body.jarvis .icon-button:hover,
+body.jarvis .tiny-button:hover {
+  border-color: rgba(56, 232, 255, 0.6);
+  box-shadow: 0 0 10px rgba(56, 232, 255, 0.2);
+}
+
+body.jarvis .primary-button {
+  background: linear-gradient(90deg, #0b9fbf, #22cde8);
+  color: #021018;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+}
+
+body.jarvis .primary-button:hover {
+  background: linear-gradient(90deg, #12b4d6, #38e8ff);
+  box-shadow: 0 0 14px rgba(56, 232, 255, 0.45);
+}
+
+body.jarvis .active-title {
+  font-weight: 400;
+  letter-spacing: 0.08em;
+  text-shadow: 0 0 10px rgba(56, 232, 255, 0.35);
+}
+
+body.jarvis .tab {
+  border-color: rgba(56, 232, 255, 0.18);
+  background: rgba(3, 14, 22, 0.9);
+  clip-path: polygon(10px 0, 100% 0, 100% 100%, 0 100%, 0 10px);
+}
+
+body.jarvis .tab.active {
+  border-color: rgba(56, 232, 255, 0.55);
+  background: var(--terminal);
+  box-shadow: inset 0 2px 0 #38e8ff;
+}
+
+body.jarvis .terminal-host::before,
+body.jarvis .terminal-host::after {
+  content: "";
+  position: absolute;
+  z-index: 3;
+  width: 22px;
+  height: 22px;
+  pointer-events: none;
+  border: 2px solid rgba(56, 232, 255, 0.55);
+}
+
+body.jarvis .terminal-host::before {
+  top: 4px;
+  left: 4px;
+  border-right: 0;
+  border-bottom: 0;
+}
+
+body.jarvis .terminal-host::after {
+  right: 4px;
+  bottom: 4px;
+  border-left: 0;
+  border-top: 0;
+}
+
+body.jarvis .changelog-dialog {
+  border-color: rgba(56, 232, 255, 0.4);
+  background: linear-gradient(180deg, #071824 0%, #050e16 100%);
+  box-shadow: 0 0 30px rgba(56, 232, 255, 0.15), 0 24px 60px rgba(0, 0, 0, 0.6);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .jarvis-button .arc-segments,
+  .jarvis-button .arc-core,
+  .ji-grid,
+  .ji-reactor circle {
+    animation: none !important;
+  }
+
+  .ji-reactor circle {
+    opacity: 1;
+  }
+}

@@ -43,6 +43,13 @@ contextBridge.exposeInMainWorld("launcher", {
   listClaudeConversations: () => ipcRenderer.invoke("claude:conversations"),
   gitStatus: (cwd) => ipcRenderer.invoke("git:status", cwd),
   gitDiff: (cwd, file, untracked) => ipcRenderer.invoke("git:diff", { cwd, file, untracked }),
+  getJarvis: () => ipcRenderer.invoke("jarvis:get"),
+  setJarvis: (patch) => ipcRenderer.invoke("jarvis:set", patch),
+  onJarvisMenu: (handler) => {
+    const listener = () => handler();
+    ipcRenderer.on("jarvis:menu", listener);
+    return () => ipcRenderer.off("jarvis:menu", listener);
+  },
   onNotifyActivate: (handler) => {
     const listener = (_event, payload) => handler(payload);
     ipcRenderer.on("notify:activate", listener);

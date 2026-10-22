@@ -1,7 +1,8 @@
 // Publication d'une version en une commande : npm run release
 //
 // 1. Verifie que la version de package.json a ses notes dans le CHANGELOG du
-//    renderer et que tout est commite.
+//    renderer, que tout est commite, et (travail a deux) que le code local est
+//    a jour avec GitHub et que la version est superieure a la derniere release.
 // 2. Build Windows (installeur NSIS) puis Linux (.deb + AppImage, dans un
 //    conteneur Docker jetable). Docker est remis dans son etat de depart :
 //    arrete (et WSL coupe) s'il l'etait, laisse tourner sinon.
@@ -70,6 +71,61 @@ function readToken() {
     fail("aucun jeton GitHub : lance d'abord  powershell -ExecutionPolicy Bypass -File scripts/gh-token.ps1 -Set");
   }
   return result.stdout.trim();
+}
+
+// --- Travail a plusieurs : on publie bien la derniere version du code ----------
+function compareVersions(a, b) {
+  const pa = String(a).split(".").map((n) => parseInt(n, 10) || 0);
+  const pb = String(b).split(".").map((n) => parseInt(n, 10) || 0);
+  for (let i = 0; i < 3; i += 1) {
+    if ((pa[i] || 0) !== (pb[i] || 0)) {
+      return (pa[i] || 0) > (pb[i] || 0) ? 1 : -1;
+    }
+  }
+  return 0;
+}
+
+function gitAuthArgs(token) {
+  const header = `AUTHORIZATION: basic ${Buffer.from(`x-access-token:${token}`).toString("base64")}`;
+  return ["-c", "credential.helper=", "-c", `http.https://github.com/.extraheader=${header}`];
+}
+
+// Renvoie la liste des problemes (vide = OK) : branche, retard sur GitHub,
+// version deja publiee ou inferieure a la derniere release.
+async function checkSync(git, token) {
+  const problems = [];
+  const branch = capture(git, ["rev-parse", "--abbrev-ref", "HEAD"]).stdout.trim();
+  if (branch !== "main") {
+    problems.push(`branche courante "${branch}" : on publie depuis main.`);
+  }
+  const fetched = capture(git, [...gitAuthArgs(token), "fetch", "origin", "main", "--tags", "--quiet"]);
+  if (fetched.status !== 0) {
+    problems.push(`impossible de recuperer l'etat de GitHub (git fetch) : ${fetched.stderr.trim()}`);
+  } else {
+    const counts = capture(git, ["rev-list", "--left-right", "--count", "HEAD...origin/main"]).stdout.trim().split(/\s+/);
+    const behind = parseInt(counts[1], 10) || 0;
+    if (behind > 0) {
+      problems.push(`GitHub a ${behind} commit(s) que tu n'as pas (travail de l'autre developpeur) : `
+        + "fais  git pull --rebase origin main , reteste, puis relance.");
+    }
+    if (capture(git, ["rev-parse", "--verify", "--quiet", `refs/tags/${version}`]).status === 0) {
+      problems.push(`le tag ${version} existe deja : monte la version dans package.json.`);
+    }
+  }
+  try {
+    const res = await fetch(`https://api.github.com/repos/${REPO}/releases/latest`, { headers: { Authorization: `Bearer ${token}` } });
+    if (res.ok) {
+      const latest = (await res.json()).tag_name;
+      if (compareVersions(version, latest) <= 0) {
+        problems.push(`la derniere release publiee est ${latest} : la version doit etre superieure (package.json = ${version}).`);
+      } else {
+        console.log(`Derniere release publiee : ${latest} -> nouvelle version ${version}`);
+      }
+    }
+  } catch (error) {
+    problems.push(`impossible de lire la derniere release GitHub : ${error.message}`);
+  }
+  return problems;
 }
 
 // --- Docker (build Linux) --------------------------------------------------------
@@ -197,12 +253,19 @@ async function publish(token, assets, notes) {
   }
   const token = readToken();
 
+  step("Verification de la synchronisation avec GitHub");
+  const syncProblems = await checkSync(git, token);
+  if (syncProblems.length && !args.has("--check")) {
+    fail(syncProblems.join("\n"));
+  }
+
   // --check : verifie seulement les prealables, sans rien construire ni publier.
   if (args.has("--check")) {
     const docker = findDocker();
     console.log(`\nNotes : ${notes.length} | git : ${git} | jeton : ${token ? "trouve" : "absent"}`
       + ` | Docker : ${docker ? (dockerRunning(docker) ? "demarre" : "arrete") : "introuvable"}`
       + ` | fichiers non commites : ${dirty ? dirty.split("\n").length : 0}`);
+    console.log(syncProblems.length ? `A corriger avant publication :\n- ${syncProblems.join("\n- ")}` : "Synchronisation GitHub : OK");
     return;
   }
 
@@ -239,8 +302,8 @@ async function publish(token, assets, notes) {
 
   if (!args.has("--no-push")) {
     step("Envoi du code sur GitHub (main)");
-    const header = `AUTHORIZATION: basic ${Buffer.from(`x-access-token:${token}`).toString("base64")}`;
-    run(git, ["-c", "credential.helper=", "-c", `http.https://github.com/.extraheader=${header}`, "push", "origin", "main"]);
+    // Refuse par GitHub (non fast-forward) si l'autre a pousse pendant le build.
+    run(git, [...gitAuthArgs(token), "push", "origin", "main"]);
   }
 
   step("Release GitHub");

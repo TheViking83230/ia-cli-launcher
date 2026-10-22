@@ -12,6 +12,7 @@ const usage = require("./usage");
 const conversation = require("./conversation");
 const claudeHistory = require("./claudeHistory");
 const gitInfo = require("./gitInfo");
+const jarvis = require("./jarvis");
 
 // Sous Linux, certaines distributions recentes (Ubuntu 24.04+) bloquent les
 // "user namespaces" non privilegies : le sandbox Chromium ne peut alors pas
@@ -392,7 +393,9 @@ function setAppMenu() {
         { role: "reload", label: "Actualiser" },
         { role: "toggleDevTools", label: "Outils de développement" },
         { type: "separator" },
-        { role: "togglefullscreen", label: "Plein écran" }
+        { role: "togglefullscreen", label: "Plein écran" },
+        { type: "separator" },
+        { label: "JARVIS…", click: () => sendToRenderer("jarvis:menu") }
       ]
     },
     {
@@ -1018,6 +1021,9 @@ app.whenReady().then(() => {
     });
     return result.canceled ? null : result.filePaths[0];
   });
+
+  ipcMain.handle("jarvis:get", () => jarvis.getState());
+  ipcMain.handle("jarvis:set", (_event, patch) => jarvis.setState(patch));
 
   ipcMain.handle("config:get", () => readConfig());
   ipcMain.handle("config:save", (_event, config) => writeConfig(config));

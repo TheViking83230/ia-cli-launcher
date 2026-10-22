@@ -51,6 +51,7 @@ const elements = {
   gitChip: document.getElementById("gitChip"),
   promptsButton: document.getElementById("promptsButton"),
   conversationsButton: document.getElementById("conversationsButton"),
+  jarvisButton: document.getElementById("jarvisButton"),
   toggleSidebarButton: document.getElementById("toggleSidebarButton"),
   sessionMeta: document.getElementById("sessionMeta"),
   historyButton: document.getElementById("historyButton"),
@@ -398,6 +399,19 @@ const TERMINAL_THEME = {
   white: "#eceff4"
 };
 
+// Variante du theme pour l'interface JARVIS (memes couleurs ANSI).
+const JARVIS_TERMINAL_THEME = {
+  ...TERMINAL_THEME,
+  background: "#02090f",
+  foreground: "#d8f7ff",
+  cursor: "#38e8ff",
+  selectionBackground: "#38e8ff44"
+};
+
+function currentTerminalTheme() {
+  return document.body.classList.contains("jarvis") ? JARVIS_TERMINAL_THEME : TERMINAL_THEME;
+}
+
 function getTerminalGlobals() {
   return {
     TerminalCtor: window.Terminal,
@@ -470,7 +484,7 @@ function createTerminal() {
     fontSize: getTerminalFontSize(),
     lineHeight: 1.2,
     scrollback: 10000,
-    theme: TERMINAL_THEME
+    theme: currentTerminalTheme()
   });
   const fitAddon = new FitAddonCtor();
   terminal.loadAddon(fitAddon);
@@ -2791,6 +2805,7 @@ const SHORTCUT_ACTIONS = [
   { id: "toggleNotifications", label: "Activer / désactiver les notifications de fin de tâche", category: "Onglets", run: () => toggleNotifications() },
   { id: "openConversations", label: "Conversations Claude (reprendre une conversation)", category: "Navigation", run: () => openConversations() },
   { id: "openPrompts", label: "Bibliothèque de prompts", category: "Navigation", run: () => openPrompts() },
+  { id: "openJarvis", label: "JARVIS", category: "Navigation", run: () => openJarvis() },
   { id: "openGitChanges", label: "Changements Git de l'onglet", category: "Navigation", run: () => openGitChanges() },
   { id: "renameTab", label: "Renommer l'onglet actif", category: "Onglets", run: () => focusRenameActive() },
   { id: "toggleSplit", label: "Vue partagée (deux onglets côte à côte)", category: "Vue partagée", run: () => toggleSplit() },
@@ -4424,6 +4439,7 @@ function bindEvents() {
   elements.managePersonasButton.addEventListener("click", openPersonasModal);
   elements.gitChip.addEventListener("click", openGitChanges);
   elements.promptsButton.addEventListener("click", openPrompts);
+  elements.jarvisButton.addEventListener("click", openJarvis);
   elements.conversationsButton.addEventListener("click", openConversations);
 
   elements.restartAiButton.addEventListener("click", () => {
@@ -4936,9 +4952,309 @@ function handleUpdateStatus(payload) {
   createIcons();
 }
 
+// --- JARVIS (easter egg) ------------------------------------------------------
+// Interface alternative facon Iron Man. Le module peut etre installe depuis
+// l'installateur Windows ou depuis ce bouton ; l'etat est garde par le
+// processus principal (src/main/jarvis.js).
+const JARVIS_SOUNDS = {
+  intro: "./jarvis/sounds/bonjour-jarvis.wav",
+  morning: "./jarvis/sounds/bonjour-jarvis.wav",
+  // Son du soir pas encore pret : vide = on reprend celui du matin.
+  evening: ""
+};
+// Video de la cinematique, a renseigner quand l'animation sera prete (ex.
+// "./jarvis/intro.mp4") ; vide = animation HUD generee en CSS.
+const JARVIS_INTRO_VIDEO = "";
+const JARVIS_INTRO_FALLBACK_MS = 8000;
+const JARVIS_INTRO_MAX_MS = 20000;
+
+const jarvis = { installed: false, active: false, playing: false };
+let classicBrandTitle = null;
+
+function playJarvisSound(src, volume = 1) {
+  const audio = new Audio(src);
+  audio.volume = volume;
+  audio.play().catch(() => {});
+  return audio;
+}
+
+function fadeOutAudio(audio, ms = 600) {
+  const start = audio.volume;
+  const steps = 12;
+  let step = 0;
+  const timer = window.setInterval(() => {
+    step += 1;
+    audio.volume = Math.max(0, start * (1 - step / steps));
+    if (step >= steps) {
+      window.clearInterval(timer);
+      audio.pause();
+    }
+  }, ms / steps);
+}
+
+function applyJarvisMode(active) {
+  jarvis.active = active;
+  document.body.classList.toggle("jarvis", active);
+  const brandTitle = document.querySelector(".brand h1");
+  if (brandTitle) {
+    classicBrandTitle ??= brandTitle.textContent;
+    brandTitle.textContent = active ? "J.A.R.V.I.S." : classicBrandTitle;
+  }
+  for (const session of state.sessions.values()) {
+    if (session.terminal?.options) {
+      session.terminal.options.theme = currentTerminalTheme();
+    }
+  }
+  updateJarvisButton();
+}
+
+function updateJarvisButton() {
+  const button = elements.jarvisButton;
+  button.classList.toggle("installed", jarvis.installed);
+  button.classList.toggle("on", jarvis.active);
+  button.title = jarvis.active ? "JARVIS en ligne" : jarvis.installed ? "Activer JARVIS" : "JARVIS";
+}
+
+async function saveJarvis(patch) {
+  const next = await window.launcher.setJarvis(patch);
+  jarvis.installed = next.installed;
+  return next;
+}
+
+// Cinematique d'ouverture : animation HUD (ou video) calee sur le son
+// « Bonjour Jarvis ». L'interface bascule sous le flash final.
+function playJarvisIntro() {
+  return new Promise((resolve) => {
+    jarvis.playing = true;
+    const overlay = document.createElement("div");
+    overlay.className = "jarvis-intro";
+    overlay.innerHTML = `
+      <div class="ji-grid"></div>
+      ${JARVIS_INTRO_VIDEO ? `<video class="ji-video" muted playsinline></video>` : ""}
+      <div class="ji-reactor">
+        <svg viewBox="0 0 200 200" aria-hidden="true">
+          <circle class="ji-r1" cx="100" cy="100" r="92" />
+          <circle class="ji-r2" cx="100" cy="100" r="78" />
+          <circle class="ji-r3" cx="100" cy="100" r="62" />
+          <circle class="ji-r4" cx="100" cy="100" r="44" />
+          <circle class="ji-core" cx="100" cy="100" r="22" />
+        </svg>
+      </div>
+      <div class="ji-title">J.A.R.V.I.S.</div>
+      <div class="ji-sub">Just A Rather Very Intelligent System</div>
+      <ul class="ji-log"></ul>
+      <div class="ji-bar"><span></span></div>
+      <div class="ji-skip">Échap ou clic pour passer</div>`;
+    document.body.appendChild(overlay);
+
+    if (JARVIS_INTRO_VIDEO) {
+      const video = overlay.querySelector(".ji-video");
+      video.src = JARVIS_INTRO_VIDEO;
+      video.play().catch(() => {});
+    }
+
+    const audio = playJarvisSound(JARVIS_SOUNDS.intro);
+    const log = overlay.querySelector(".ji-log");
+    const lines = [
+      "Initialisation des systèmes principaux",
+      "Connexion aux terminaux IA",
+      "Synchronisation des sessions",
+      "Calibrage de l'interface holographique",
+      "Protocoles de sécurité actifs",
+      "Tous les systèmes sont opérationnels"
+    ];
+    const timers = [];
+    let finished = false;
+
+    function finish(skipped) {
+      if (finished) {
+        return;
+      }
+      finished = true;
+      timers.forEach((timer) => window.clearTimeout(timer));
+      document.removeEventListener("keydown", onKey, true);
+      if (skipped) {
+        fadeOutAudio(audio);
+      }
+      overlay.classList.add("ji-out");
+      applyJarvisMode(true);
+      window.setTimeout(() => {
+        overlay.remove();
+        jarvis.playing = false;
+        resolve();
+      }, 900);
+    }
+
+    function onKey(event) {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        finish(true);
+      }
+    }
+
+    function start(duration) {
+      overlay.style.setProperty("--ji-duration", `${duration}ms`);
+      overlay.classList.add("ji-run");
+      lines.forEach((text, index) => {
+        timers.push(
+          window.setTimeout(() => {
+            const item = document.createElement("li");
+            item.innerHTML = "<span></span><b>OK</b>";
+            item.querySelector("span").textContent = text;
+            log.appendChild(item);
+          }, (duration * 0.82 * (index + 1)) / lines.length)
+        );
+      });
+      timers.push(window.setTimeout(() => finish(false), duration));
+    }
+
+    // La duree suit celle du son (plafonnee) ; repli si le son ne se charge pas.
+    let started = false;
+    const begin = (duration) => {
+      if (!started) {
+        started = true;
+        start(duration);
+      }
+    };
+    audio.addEventListener("loadedmetadata", () => {
+      const ms = Number.isFinite(audio.duration) ? audio.duration * 1000 : JARVIS_INTRO_FALLBACK_MS;
+      begin(Math.min(Math.max(ms, 3000), JARVIS_INTRO_MAX_MS));
+    });
+    audio.addEventListener("error", () => begin(JARVIS_INTRO_FALLBACK_MS));
+    window.setTimeout(() => begin(JARVIS_INTRO_FALLBACK_MS), 1500);
+
+    overlay.addEventListener("click", () => finish(true));
+    document.addEventListener("keydown", onKey, true);
+  });
+}
+
+async function activateJarvis() {
+  if (jarvis.playing) {
+    return;
+  }
+  await playJarvisIntro();
+  await saveJarvis({ active: true, pendingIntro: false });
+}
+
+async function deactivateJarvis() {
+  await saveJarvis({ active: false });
+  applyJarvisMode(false);
+}
+
+function openJarvisInstall() {
+  const modal = createModal({
+    icon: "cpu",
+    title: "JARVIS",
+    sub: "Module disponible",
+    dialogClass: "jarvis-dialog"
+  });
+  modal.body.innerHTML = `
+    <p>JARVIS est une refonte de l'interface façon Iron Man, avec des fonctionnalités avancées.</p>
+    <p>Un peu moins rapide que l'interface classique, mais plus fun. Tu pourras revenir à l'interface classique ou le désinstaller à tout moment.</p>
+    <div class="jarvis-install-progress hidden"><span></span></div>`;
+  const closeButton = modal.actions.querySelector("button");
+  closeButton.textContent = "Plus tard";
+  closeButton.className = "ghost-button";
+
+  const install = document.createElement("button");
+  install.type = "button";
+  install.className = "primary-button";
+  install.textContent = "Installer JARVIS";
+  install.addEventListener("click", async () => {
+    install.disabled = true;
+    closeButton.disabled = true;
+    install.textContent = "Installation…";
+    modal.body.querySelector(".jarvis-install-progress").classList.remove("hidden");
+    await saveJarvis({ installed: true });
+    window.setTimeout(() => {
+      modal.close();
+      updateJarvisButton();
+      activateJarvis();
+    }, 1600);
+  });
+  modal.actions.appendChild(install);
+  createIcons();
+}
+
+function openJarvisControls() {
+  const modal = createModal({
+    icon: "cpu",
+    title: "J.A.R.V.I.S.",
+    sub: jarvis.active ? "En ligne" : "Installé, en veille",
+    dialogClass: "jarvis-dialog"
+  });
+  modal.body.innerHTML = "<p>Les fonctionnalités avancées arriveront dans les prochaines versions.</p>";
+  const closeButton = modal.actions.querySelector("button");
+  closeButton.className = "ghost-button";
+
+  const addAction = (label, className, run) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = className;
+    button.textContent = label;
+    button.addEventListener("click", () => {
+      modal.close();
+      run();
+    });
+    modal.actions.insertBefore(button, closeButton);
+  };
+
+  addAction("Désinstaller", "ghost-button danger", async () => {
+    if (window.confirm("Désinstaller JARVIS ? L'interface classique sera rétablie.")) {
+      await saveJarvis({ installed: false });
+      applyJarvisMode(false);
+    }
+  });
+  if (jarvis.active) {
+    addAction("Rejouer la cinématique", "ghost-button", () => activateJarvis());
+    addAction("Interface classique", "primary-button", () => deactivateJarvis());
+  } else {
+    addAction("Activer JARVIS", "primary-button", () => activateJarvis());
+  }
+  createIcons();
+}
+
+// Bouton JARVIS / menu Affichage : propose l'installation, sinon lance
+// JARVIS (cinematique) ou ouvre ses reglages s'il est deja actif.
+function openJarvis() {
+  if (jarvis.playing) {
+    return;
+  }
+  if (!jarvis.installed) {
+    openJarvisInstall();
+  } else if (!jarvis.active) {
+    activateJarvis();
+  } else {
+    openJarvisControls();
+  }
+}
+
+async function initJarvis() {
+  window.launcher.onJarvisMenu(openJarvis);
+  let saved;
+  try {
+    saved = await window.launcher.getJarvis();
+  } catch {
+    return;
+  }
+  jarvis.installed = saved.installed;
+  applyJarvisMode(saved.installed && saved.active && !saved.pendingIntro);
+  if (saved.pendingIntro) {
+    activateJarvis();
+  } else if (jarvis.active) {
+    const hour = new Date().getHours();
+    const evening = hour < 5 || hour >= 18;
+    playJarvisSound((evening && JARVIS_SOUNDS.evening) || JARVIS_SOUNDS.morning);
+  }
+}
+
 // Notes de version affichees apres une mise a jour. La cle est le numero de
 // version, la valeur la liste des nouveautes a montrer.
 const CHANGELOG = {
+  "0.1.21": [
+    "Un nouveau module se cache dans la barre d'outils… indice : il a un réacteur.",
+    "Également proposé en option dans l'installateur Windows, et dans le menu Affichage."
+  ],
   "0.1.20": [
     "Correctif : le quota Claude ne disparaît plus quand la jauge de contexte est affichée ; s'il est momentanément indisponible, la raison s'affiche.",
     "Quota Claude interrogé au plus toutes les 2 minutes, toutes fenêtres du launcher confondues (cache partagé), pour ne plus être limité par Anthropic.",
@@ -5175,6 +5491,7 @@ async function init() {
   }
 
   maybeShowChangelog();
+  initJarvis();
 
   // Quota en temps reel de l'IA de l'onglet actif (inutile fenetre masquee).
   window.setInterval(() => {
