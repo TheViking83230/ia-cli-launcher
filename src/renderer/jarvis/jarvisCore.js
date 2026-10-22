@@ -78,6 +78,14 @@
           targets[i] = value;
           targets[BARS - 1 - i] = value;
         }
+      } else if (this.state === "speaking") {
+        // Parole sans source analysable (voix de Windows) : animation simulee.
+        const syllable = 0.5 + 0.5 * Math.sin(time * 11) * Math.sin(time * 3.7);
+        for (let i = 0; i < BARS / 2; i += 1) {
+          const value = syllable * (0.25 + 0.35 * Math.abs(Math.sin(time * 6 + i * 0.45)));
+          targets[i] = value;
+          targets[BARS - 1 - i] = value;
+        }
       } else if (this.state === "thinking") {
         for (let i = 0; i < BARS; i += 1) {
           const angle = (i / BARS) * Math.PI * 2;

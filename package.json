@@ -1,6 +1,6 @@
 {
   "name": "ia-cli-launcher",
-  "version": "0.1.25",
+  "version": "0.1.26",
   "description": "Lanceur Windows admin avec onglets terminal pour CLI IA.",
   "author": "Dev OpA",
   "homepage": "https://devopa.fr",
@@ -11,7 +11,9 @@
     "start": "electron .",
     "pack": "electron-builder --dir --win",
     "pack:linux": "electron-builder --dir --linux",
+    "predist:installer": "node scripts/fetch-voice.js win32",
     "dist:installer": "electron-builder --win nsis",
+    "fetch-voice": "node scripts/fetch-voice.js",
     "dist:portable": "electron-builder --win portable",
     "dist:linux": "electron-builder --linux deb AppImage",
     "release:win": "electron-builder --win nsis --publish always",
@@ -61,6 +63,20 @@
       "src/**/*",
       "package.json",
       "node_modules/**/*"
+    ],
+    "extraResources": [
+      {
+        "from": "vendor/piper/${os}",
+        "to": "piper/engine"
+      },
+      {
+        "from": "vendor/piper/voices",
+        "to": "piper/voices"
+      },
+      {
+        "from": "build/piper-licenses.txt",
+        "to": "piper/LICENCES.txt"
+      }
     ],
     "win": {
       "icon": "build/icon.ico",

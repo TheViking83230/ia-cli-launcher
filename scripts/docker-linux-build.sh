@@ -7,7 +7,11 @@ mkdir -p /build
 cd /src
 # Copie sur le systeme de fichiers du conteneur (bit SUID de chrome-sandbox),
 # sans les dependances Windows ni les artefacts.
-tar -cf - package.json package-lock.json src build | tar -xf - -C /build
+tar -cf - package.json package-lock.json src build scripts | tar -xf - -C /build
+# Voix de JARVIS deja recuperees cote Windows : reutilisees telles quelles.
+if [ -d vendor/piper/voices ]; then
+  tar -cf - vendor/piper/voices | tar -xf - -C /build
+fi
 cd /build
 
 # Scripts shell venant de Windows : fins de ligne LF.
@@ -15,6 +19,8 @@ find build -name '*.sh' -exec sed -i 's/\r$//' {} +
 
 echo ">> npm ci"
 npm ci --no-audit --no-fund
+echo ">> moteur et voix de JARVIS (Piper Linux)"
+node scripts/fetch-voice.js linux
 echo ">> electron-builder --linux deb AppImage"
 npx --no-install electron-builder --linux deb AppImage --publish never
 

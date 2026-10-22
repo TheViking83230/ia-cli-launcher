@@ -45,6 +45,8 @@ contextBridge.exposeInMainWorld("launcher", {
   gitDiff: (cwd, file, untracked) => ipcRenderer.invoke("git:diff", { cwd, file, untracked }),
   getJarvis: () => ipcRenderer.invoke("jarvis:get"),
   setJarvis: (patch) => ipcRenderer.invoke("jarvis:set", patch),
+  voiceStatus: () => ipcRenderer.invoke("voice:status"),
+  voiceSpeak: (request) => ipcRenderer.invoke("voice:speak", request),
   onJarvisMenu: (handler) => {
     const listener = () => handler();
     ipcRenderer.on("jarvis:menu", listener);

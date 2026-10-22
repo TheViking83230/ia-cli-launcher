@@ -1076,6 +1076,20 @@ function restartAllSameCli() {
   restartSessions(sessions, `toutes les IA ${getProfileLabel(profileId) || profileId}`);
 }
 
+// Fenetres modales : un clic sur le fond ne ferme la fenetre que s'il y a aussi
+// commence. Sans ca, une selection de texte relachee hors de la fenetre
+// produit un "clic" sur le fond et la ferme.
+let pointerDownTarget = null;
+document.addEventListener("mousedown", (event) => {
+  pointerDownTarget = event.target;
+}, true);
+document.addEventListener("click", (event) => {
+  const backdrop = event.target instanceof Element && event.target.matches(".changelog-modal, .history-backdrop");
+  if (backdrop && pointerDownTarget !== event.target) {
+    event.stopImmediatePropagation();
+  }
+}, true);
+
 // --- Fenetre modale generique (meme style que les notes de version) --------
 function createModal({ icon, title, sub, dialogClass = "" }) {
   const overlay = document.createElement("div");
@@ -5107,6 +5121,62 @@ const JARVIS_INTRO_FALLBACK_MS = 8000;
 const JARVIS_INTRO_MAX_MS = 20000;
 
 const jarvis = { installed: false, active: false, playing: false };
+
+// Reglages de la voix (voix choisie, debit, grave, effets), par PC.
+const JARVIS_VOICE_DEFAULTS = { voice: "tom", speed: 1.15, pitch: 0.14, metal: 0.35, echo: 0.3 };
+
+function loadJarvisVoiceSettings() {
+  try {
+    return { ...JARVIS_VOICE_DEFAULTS, ...JSON.parse(window.localStorage.getItem("jarvisVoice") || "{}") };
+  } catch {
+    return { ...JARVIS_VOICE_DEFAULTS };
+  }
+}
+
+function saveJarvisVoiceSettings(settings) {
+  window.localStorage.setItem("jarvisVoice", JSON.stringify(settings));
+}
+
+// Traitement "IA" de la voix : leger filtre radio, resonance metallique (filtre
+// en peigne : retard tres court reinjecte) et echo. Renvoie le noeud de sortie.
+function buildJarvisVoiceChain(ctx, source, settings) {
+  const highpass = ctx.createBiquadFilter();
+  highpass.type = "highpass";
+  highpass.frequency.value = 110;
+  source.connect(highpass);
+
+  const mix = ctx.createGain();
+  highpass.connect(mix);
+
+  const comb = ctx.createDelay(0.05);
+  comb.delayTime.value = 0.011;
+  const combFeedback = ctx.createGain();
+  combFeedback.gain.value = 0.6 * settings.metal;
+  const combWet = ctx.createGain();
+  combWet.gain.value = 0.7 * settings.metal;
+  highpass.connect(comb);
+  comb.connect(combFeedback);
+  combFeedback.connect(comb);
+  comb.connect(combWet);
+  combWet.connect(mix);
+
+  const output = ctx.createGain();
+  mix.connect(output);
+
+  const echo = ctx.createDelay(1);
+  echo.delayTime.value = 0.13;
+  const echoFeedback = ctx.createGain();
+  echoFeedback.gain.value = 0.3 * settings.echo;
+  const echoWet = ctx.createGain();
+  echoWet.gain.value = 0.4 * settings.echo;
+  mix.connect(echo);
+  echo.connect(echoFeedback);
+  echoFeedback.connect(echo);
+  echo.connect(echoWet);
+  echoWet.connect(output);
+
+  return output;
+}
 let classicBrandTitle = null;
 
 function playJarvisSound(src, volume = 1) {
@@ -5403,6 +5473,7 @@ function openJarvisCorePreview() {
       voice.pause();
       voice = null;
     }
+    window.speechSynthesis?.cancel();
   }
 
   function analyserFor(source, toSpeakers) {
@@ -5465,6 +5536,151 @@ function openJarvisCorePreview() {
     modal.actions.insertBefore(button, closeButton);
   }
 
+  // --- Voix locale (Piper) + effet "JARVIS" ; voix de Windows en secours ---
+  const voicePanel = document.createElement("div");
+  voicePanel.className = "jarvis-voice";
+  modal.body.appendChild(voicePanel);
+  const voiceNote = document.createElement("div");
+  voiceNote.className = "jarvis-voice-note";
+  const settings = loadJarvisVoiceSettings();
+  let voiceStatus = null;
+
+  // Voix de secours : voix francaise de Windows (pas d'analyse du son possible,
+  // l'icone simule la parole).
+  function speakWithSystemVoice(text, reason) {
+    const utterance = new SpeechSynthesisUtterance(text);
+    utterance.lang = "fr-FR";
+    const french = window.speechSynthesis.getVoices().find((v) => v.lang?.toLowerCase().startsWith("fr"));
+    if (french) {
+      utterance.voice = french;
+    }
+    utterance.onend = () => {
+      if (core.state === "speaking") {
+        setState("idle");
+      }
+    };
+    core.setState("speaking");
+    label.textContent = "JARVIS parle (voix de secours Windows)";
+    voiceNote.textContent = reason;
+    window.speechSynthesis.speak(utterance);
+  }
+
+  async function sayText(text) {
+    stopSources();
+    core.setState("thinking");
+    label.textContent = "Génération de la voix…";
+    voiceNote.textContent = "";
+    // Voix plus grave = lecture ralentie ; la diction est generee plus vite
+    // d'autant pour garder le meme debit.
+    const rate = 1 - settings.pitch;
+    const result = await window.launcher.voiceSpeak({ text, voiceId: settings.voice, lengthScale: rate / settings.speed });
+    if (core.state !== "thinking" || !modal.overlay.isConnected) {
+      return;
+    }
+    if (!result?.audio) {
+      speakWithSystemVoice(text, result?.error || "Voix locale indisponible.");
+      return;
+    }
+    audioContext ??= new AudioContext();
+    const url = URL.createObjectURL(new Blob([result.audio], { type: "audio/wav" }));
+    voice = new Audio(url);
+    voice.preservesPitch = false;
+    voice.playbackRate = rate;
+    const output = buildJarvisVoiceChain(audioContext, audioContext.createMediaElementSource(voice), settings);
+    core.setAnalyser(analyserFor(output, true));
+    core.setState("speaking");
+    const current = voiceStatus?.voices.find((v) => v.id === settings.voice);
+    label.textContent = `JARVIS parle (voix ${current?.label || settings.voice})`;
+    voice.addEventListener("ended", () => {
+      URL.revokeObjectURL(url);
+      // Laisse l'echo s'eteindre avant de repasser en veille.
+      window.setTimeout(() => {
+        if (core.state === "speaking") {
+          setState("idle");
+        }
+      }, 400);
+    });
+    voice.play().catch(() => {});
+  }
+
+  function slider(text, key, min, max, step, format) {
+    const row = document.createElement("label");
+    row.className = "jarvis-voice-slider";
+    const name = document.createElement("span");
+    name.textContent = text;
+    const input = document.createElement("input");
+    input.type = "range";
+    input.min = String(min);
+    input.max = String(max);
+    input.step = String(step);
+    input.value = String(settings[key]);
+    const value = document.createElement("em");
+    value.textContent = format(settings[key]);
+    input.addEventListener("input", () => {
+      settings[key] = Number(input.value);
+      value.textContent = format(settings[key]);
+      saveJarvisVoiceSettings(settings);
+    });
+    row.append(name, input, value);
+    return row;
+  }
+
+  async function renderVoicePanel() {
+    voiceStatus = await window.launcher.voiceStatus();
+    voicePanel.innerHTML = "";
+    if (!voiceStatus.engine || !voiceStatus.voices.length) {
+      voiceNote.textContent = "Voix de JARVIS absente de cette installation : voix de Windows utilisée.";
+    }
+
+    const voiceRow = document.createElement("div");
+    voiceRow.className = "jarvis-voice-row";
+    const current = voiceStatus.voices.find((item) => item.id === settings.voice) || voiceStatus.voices[0];
+    if (voiceStatus.voices.length > 1) {
+      const select = document.createElement("select");
+      for (const item of voiceStatus.voices) {
+        const option = document.createElement("option");
+        option.value = item.id;
+        option.textContent = `Voix : ${item.label}`;
+        select.appendChild(option);
+      }
+      select.value = current.id;
+      select.addEventListener("change", () => {
+        settings.voice = select.value;
+        saveJarvisVoiceSettings(settings);
+        renderVoicePanel();
+      });
+      voiceRow.appendChild(select);
+    }
+
+    const license = document.createElement("div");
+    license.className = "jarvis-voice-license";
+    license.textContent = current ? `${current.label} · ${current.license} · synthèse Piper, 100 % locale` : "";
+
+    const testRow = document.createElement("div");
+    testRow.className = "jarvis-voice-row";
+    const phrase = document.createElement("input");
+    phrase.type = "text";
+    phrase.value = "Bonjour Monsieur. Tous les systèmes sont opérationnels.";
+    const test = document.createElement("button");
+    test.type = "button";
+    test.className = "primary-button";
+    test.textContent = "Tester la voix";
+    test.addEventListener("click", () => sayText(phrase.value));
+    testRow.append(phrase, test);
+
+    const sliders = document.createElement("div");
+    sliders.className = "jarvis-voice-sliders";
+    sliders.append(
+      slider("Débit", "speed", 0.7, 1.4, 0.05, (v) => `${Math.round(v * 100)} %`),
+      slider("Grave", "pitch", 0, 0.25, 0.01, (v) => `${Math.round(v * 100)} %`),
+      slider("Métal", "metal", 0, 1, 0.05, (v) => `${Math.round(v * 100)} %`),
+      slider("Écho", "echo", 0, 1, 0.05, (v) => `${Math.round(v * 100)} %`)
+    );
+
+    voicePanel.append(voiceRow, license, sliders, testRow, voiceNote);
+  }
+  renderVoicePanel();
+
   // Liberation du micro, du son et de l'animation a la fermeture.
   const observer = new MutationObserver(() => {
     if (!modal.overlay.isConnected) {
@@ -5519,6 +5735,10 @@ async function initJarvis() {
 // Notes de version affichees apres une mise a jour. La cle est le numero de
 // version, la valeur la liste des nouveautes a montrer.
 const CHANGELOG = {
+  "0.1.26": [
+    "Le module à réacteur a trouvé sa voix : synthèse vocale intégrée, 100 % locale (hors ligne, rien à installer), avec réglages de débit, de grave et d'effets.",
+    "Correctif : sélectionner du texte dans une fenêtre en relâchant la souris à l'extérieur ne la ferme plus."
+  ],
   "0.1.25": [
     "Le module à réacteur prépare sa voix : aperçu de son icône « à l'écoute », qui réagit au micro et à la parole (veille, écoute, réflexion, parole).",
     "Les boutons de sa fenêtre passent à la ligne au lieu d'être coupés."

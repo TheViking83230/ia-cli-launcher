@@ -14,6 +14,7 @@ const claudeHistory = require("./claudeHistory");
 const gitInfo = require("./gitInfo");
 const jarvis = require("./jarvis");
 const clipboardImage = require("./clipboardImage");
+const piper = require("./piper");
 
 // Sous Linux, certaines distributions recentes (Ubuntu 24.04+) bloquent les
 // "user namespaces" non privilegies : le sandbox Chromium ne peut alors pas
@@ -1026,6 +1027,8 @@ app.whenReady().then(() => {
 
   ipcMain.handle("jarvis:get", () => jarvis.getState());
   ipcMain.handle("jarvis:set", (_event, patch) => jarvis.setState(patch));
+  ipcMain.handle("voice:status", () => piper.status());
+  ipcMain.handle("voice:speak", (_event, request) => piper.speak(request || {}));
 
   ipcMain.handle("config:get", () => readConfig());
   ipcMain.handle("config:save", (_event, config) => writeConfig(config));

@@ -13,6 +13,9 @@ out/
 # Reglages locaux de Claude Code
 .claude/
 
+# Moteur et voix de JARVIS (Piper), recuperes au build par scripts/fetch-voice.js
+/vendor/
+
 # Sons bruts (sources) : seuls ceux copies dans src/renderer/jarvis/sounds sont
 # livres. Le depot est public : pas de musique sous droits.
 /Son/

@@ -1,0 +1,25 @@
+Voix de JARVIS - composants tiers embarques
+===========================================
+
+IA CLI Launcher lance ces composants comme programmes separes pour la
+synthese vocale locale. Ils ne sont pas modifies.
+
+Piper (moteur de synthese vocale)
+  Licence : MIT
+  Source  : https://github.com/rhasspy/piper (version 2023.11.14-2)
+
+eSpeak NG (phonemisation, inclus dans Piper)
+  Licence : GNU GPL v3
+  Source  : https://github.com/espeak-ng/espeak-ng
+
+ONNX Runtime (inclus dans Piper)
+  Licence : MIT
+  Source  : https://github.com/microsoft/onnxruntime
+
+Voix francaise "Tom" (fr_FR-tom-medium)
+  Licence : GNU AGPL v3
+  Modele  : https://huggingface.co/rhasspy/piper-voices/tree/v1.0.0/fr/fr_FR/tom/medium
+  Source  : https://git.bksp.space/Tjiho/French-tts-model-piper
+
+Les textes complets des licences GPL v3 et AGPL v3 sont disponibles sur
+https://www.gnu.org/licenses/ et celui de la licence MIT avec chaque projet.
