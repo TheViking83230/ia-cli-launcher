@@ -3017,6 +3017,66 @@ select:focus {
   }
 }
 
+/* Apercu de l'icone a l'ecoute. */
+.jarvis-core-preview {
+  width: min(560px, 100%);
+}
+
+.jarvis-core-stage {
+  display: grid;
+  place-items: center;
+  padding: 6px 0;
+  border-radius: 10px;
+  background: radial-gradient(circle at 50% 50%, rgba(56, 232, 255, 0.08), transparent 65%);
+}
+
+.jarvis-core-label {
+  min-height: 20px;
+  margin-top: 8px;
+  color: #8fd9ea;
+  font-family: Bahnschrift, "Segoe UI", sans-serif;
+  font-size: 13px;
+  letter-spacing: 0.08em;
+  text-align: center;
+}
+
+.jarvis-dialog .changelog-actions {
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+/* Mini reacteur dans la fenetre JARVIS : ouvre l'apercu au clic. */
+.jarvis-core-teaser {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  width: 100%;
+  margin-top: 4px;
+  padding: 8px 12px;
+  border: 1px solid rgba(56, 232, 255, 0.25);
+  border-radius: 10px;
+  background: rgba(56, 232, 255, 0.05);
+  color: #bff7ff;
+  text-align: left;
+}
+
+.jarvis-core-teaser:hover {
+  border-color: rgba(56, 232, 255, 0.6);
+  box-shadow: 0 0 14px rgba(56, 232, 255, 0.2);
+}
+
+.jarvis-core-teaser small {
+  display: block;
+  margin-top: 2px;
+  color: #7fbfd0;
+}
+
+.jarvis-core-preview [data-state].active {
+  border-color: #38e8ff;
+  color: #bff7ff;
+  box-shadow: 0 0 10px rgba(56, 232, 255, 0.3);
+}
+
 /* Interface JARVIS : premiere version du theme (HUD cyan). */
 body.jarvis {
   --bg: #030b12;

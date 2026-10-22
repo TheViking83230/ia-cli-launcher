@@ -5322,6 +5322,29 @@ function openJarvisControls() {
     dialogClass: "jarvis-dialog"
   });
   modal.body.innerHTML = "<p>Les fonctionnalités avancées arriveront dans les prochaines versions.</p>";
+
+  // Mini reacteur anime : acces direct a l'apercu de l'icone a l'ecoute.
+  const teaser = document.createElement("button");
+  teaser.type = "button";
+  teaser.className = "jarvis-core-teaser";
+  const teaserIcon = document.createElement("span");
+  const teaserText = document.createElement("span");
+  teaserText.innerHTML = "<strong>Icône à l'écoute</strong><small>Aperçu des états : veille, écoute (micro), réflexion, parole</small>";
+  teaser.append(teaserIcon, teaserText);
+  modal.body.appendChild(teaser);
+  const miniCore = new window.JarvisCore(teaserIcon, { size: 64 });
+  teaser.addEventListener("click", () => {
+    modal.close();
+    openJarvisCorePreview();
+  });
+  const stopMini = new MutationObserver(() => {
+    if (!modal.overlay.isConnected) {
+      stopMini.disconnect();
+      miniCore.destroy();
+    }
+  });
+  stopMini.observe(document.body, { childList: true });
+
   const closeButton = modal.actions.querySelector("button");
   closeButton.className = "ghost-button";
 
@@ -5349,6 +5372,111 @@ function openJarvisControls() {
   } else {
     addAction("Activer JARVIS", "primary-button", () => activateJarvis());
   }
+  createIcons();
+}
+
+// Apercu de l'icone "a l'ecoute" (future interface vocale) : les quatre etats
+// du reacteur, avec le vrai micro et la voix de l'intro pour les tester.
+function openJarvisCorePreview() {
+  const modal = createModal({
+    icon: "audio-lines",
+    title: "J.A.R.V.I.S.",
+    sub: "Aperçu de l'icône à l'écoute",
+    dialogClass: "jarvis-dialog jarvis-core-preview"
+  });
+  const stage = document.createElement("div");
+  stage.className = "jarvis-core-stage";
+  const label = document.createElement("div");
+  label.className = "jarvis-core-label";
+  modal.body.append(stage, label);
+  const core = new window.JarvisCore(stage, { size: 300 });
+
+  let audioContext = null;
+  let micStream = null;
+  let voice = null;
+
+  function stopSources() {
+    core.setAnalyser(null);
+    micStream?.getTracks().forEach((track) => track.stop());
+    micStream = null;
+    if (voice) {
+      voice.pause();
+      voice = null;
+    }
+  }
+
+  function analyserFor(source, toSpeakers) {
+    const analyser = audioContext.createAnalyser();
+    analyser.fftSize = 256;
+    analyser.smoothingTimeConstant = 0.6;
+    source.connect(analyser);
+    if (toSpeakers) {
+      analyser.connect(audioContext.destination);
+    }
+    return analyser;
+  }
+
+  const LABELS = {
+    idle: "En veille",
+    listening: "À l'écoute…",
+    thinking: "Réflexion…",
+    speaking: "JARVIS parle"
+  };
+
+  async function setState(state) {
+    stopSources();
+    core.setState(state);
+    label.textContent = LABELS[state];
+    for (const button of modal.actions.querySelectorAll("[data-state]")) {
+      button.classList.toggle("active", button.dataset.state === state);
+    }
+    audioContext ??= new AudioContext();
+    if (state === "listening") {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        // Etat change ou fenetre fermee pendant la demande d'acces au micro.
+        if (core.state !== "listening" || !modal.overlay.isConnected) {
+          stream.getTracks().forEach((track) => track.stop());
+          return;
+        }
+        micStream = stream;
+        core.setAnalyser(analyserFor(audioContext.createMediaStreamSource(micStream), false));
+        label.textContent = "À l'écoute… (parle pour voir l'icône réagir)";
+      } catch {
+        label.textContent = "À l'écoute… (micro indisponible : vérifie l'accès au micro dans les paramètres de Windows)";
+      }
+    } else if (state === "speaking") {
+      voice = new Audio(JARVIS_SOUNDS.intro);
+      core.setAnalyser(analyserFor(audioContext.createMediaElementSource(voice), true));
+      voice.addEventListener("ended", () => setState("idle"));
+      voice.play().catch(() => {});
+    }
+  }
+
+  const closeButton = modal.actions.querySelector("button");
+  closeButton.className = "ghost-button";
+  for (const [state, text] of [["idle", "Veille"], ["listening", "Écoute"], ["thinking", "Réflexion"], ["speaking", "Parle"]]) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "ghost-button";
+    button.dataset.state = state;
+    button.textContent = text;
+    button.addEventListener("click", () => setState(state));
+    modal.actions.insertBefore(button, closeButton);
+  }
+
+  // Liberation du micro, du son et de l'animation a la fermeture.
+  const observer = new MutationObserver(() => {
+    if (!modal.overlay.isConnected) {
+      observer.disconnect();
+      stopSources();
+      core.destroy();
+      audioContext?.close();
+    }
+  });
+  observer.observe(document.body, { childList: true });
+
+  setState("idle");
   createIcons();
 }
 
@@ -5391,6 +5519,10 @@ async function initJarvis() {
 // Notes de version affichees apres une mise a jour. La cle est le numero de
 // version, la valeur la liste des nouveautes a montrer.
 const CHANGELOG = {
+  "0.1.25": [
+    "Le module à réacteur prépare sa voix : aperçu de son icône « à l'écoute », qui réagit au micro et à la parole (veille, écoute, réflexion, parole).",
+    "Les boutons de sa fenêtre passent à la ligne au lieu d'être coupés."
+  ],
   "0.1.24": [
     "Interface allégée : chaque section du menu latéral se replie d'un clic sur son titre (« Profil actif » est replié par défaut).",
     "Le petit bouton ‹‹ à côté du titre de l'onglet masque Renommer, Redémarrer, Relais et Git ; le quota reste visible.",
