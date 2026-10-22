@@ -300,6 +300,7 @@
           </div>
         </section>
         <section class="jh2-center">
+          <div class="jh2-reactor">
           <div class="jh2-rings">
             <!-- Un calque par anneau : la rotation est faite par la carte, sans redessin. -->
             <svg class="jh2-ring r1" viewBox="0 0 600 600" aria-hidden="true"><circle cx="300" cy="300" r="290" /></svg>
@@ -311,6 +312,7 @@
             <svg class="jh2-ring r4" viewBox="0 0 600 600" aria-hidden="true"><circle cx="300" cy="300" r="240" /></svg>
             <svg class="jh2-ring r5" viewBox="0 0 600 600" aria-hidden="true"><circle cx="300" cy="300" r="226" /></svg>
             <div class="jh2-core"></div>
+          </div>
           </div>
           <div class="jh2-state"></div>
           <div class="jh2-caption"></div>
@@ -347,8 +349,13 @@
       this.setCaption("EN VEILLE", "");
     }
 
+    // Le reacteur suit la taille reelle des anneaux (fenetre reduite, autre ecran...).
     coreSize() {
-      return Math.round(Math.max(180, Math.min(340, window.innerHeight * 0.34, window.innerWidth * 0.24)));
+      const rings = this.$(".jh2-rings").clientWidth;
+      if (!rings) {
+        return this.core ? this.core.size : 320;
+      }
+      return Math.round(Math.max(90, Math.min(340, rings * 0.6)));
     }
 
     bindEvents() {
@@ -391,18 +398,25 @@
           input.value = "";
         }
       });
+      // Recreer le reacteur coute cher : on attend la fin du redimensionnement
+      // et on ignore les petites variations.
       this.onResize = () => {
-        const size = this.coreSize();
-        if (size !== this.core.size) {
+        window.clearTimeout(this.resizeTimer);
+        this.resizeTimer = window.setTimeout(() => {
+          const size = this.coreSize();
+          if (Math.abs(size - this.core.size) < 8) {
+            return;
+          }
           this.core.destroy();
           this.core = new window.JarvisCore(this.$(".jh2-core"), { size });
           this.core.setState(this.coreState || "idle");
           if (!this.visible || this.mode === "focus") {
             this.core.pause();
           }
-        }
+        }, 150);
       };
-      window.addEventListener("resize", this.onResize);
+      this.resizeObserver = new ResizeObserver(this.onResize);
+      this.resizeObserver.observe(this.$(".jh2-rings"));
     }
 
     updateSoundButton() {
@@ -465,7 +479,8 @@
       this.core.destroy();
       this.miniCore.destroy();
       this.backdrop.destroy();
-      window.removeEventListener("resize", this.onResize);
+      this.resizeObserver.disconnect();
+      window.clearTimeout(this.resizeTimer);
     }
 
     // Sequence de demarrage : lignes de diagnostic puis ouverture des panneaux.

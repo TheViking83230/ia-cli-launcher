@@ -7106,6 +7106,10 @@ async function initJarvis() {
 // Notes de version affichees apres une mise a jour. La cle est le numero de
 // version, la valeur la liste des nouveautes a montrer.
 const CHANGELOG = {
+  "0.1.31": [
+    "L'interface du réacteur s'adapte à la taille de la fenêtre et de l'écran : la barre de commande ne passe plus derrière l'activité des IA et le journal vocal quand la fenêtre est réduite ou déplacée sur un autre écran.",
+    "Sur les petites fenêtres, les panneaux se réorganisent (sessions sous les systèmes, puis tout empilé avec défilement) et le réacteur se redimensionne sans à-coups."
+  ],
   "0.1.30": [
     "Le module à réacteur a une toute nouvelle interface plein écran façon film : réacteur au centre, systèmes du PC (processeur, mémoire, carte graphique), sessions et quotas, activité de l'IA en direct et journal vocal.",
     "Un clic sur une session l'ouvre en gardant le bandeau du réacteur en haut ; une barre de commande permet d'écrire à l'IA sans quitter l'interface.",

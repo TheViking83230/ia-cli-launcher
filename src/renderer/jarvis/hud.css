@@ -599,18 +599,31 @@ li.enter,
 }
 
 /* --- Centre : reacteur, anneaux, sous-titres --- */
+/* Le reacteur prend l'espace restant : la barre de commande garde toujours sa place
+   au lieu de deborder sous les panneaux du bas quand la fenetre est petite. */
 .jh2-center {
   grid-area: center;
+  z-index: 2;
+  min-width: 0;
   display: grid;
-  grid-template-rows: 1fr auto auto auto;
+  grid-template-rows: minmax(0, 1fr) auto auto auto;
   justify-items: center;
   align-items: center;
   gap: 8px;
 }
 
+.jh2-reactor {
+  container-type: size;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  display: grid;
+  place-items: center;
+}
+
 .jh2-rings {
   position: relative;
-  width: min(62vh, 36vw, 560px);
+  width: min(100cqw, 100cqh, 560px);
   aspect-ratio: 1;
   display: grid;
   place-items: center;
@@ -810,6 +823,83 @@ li.enter,
   top: 11px;
   cursor: pointer;
   z-index: 3;
+}
+
+/* --- Fenetres reduites et petits ecrans --- */
+@media (max-height: 760px) {
+  .jh2 {
+    grid-template-rows: var(--top-h) 1fr minmax(110px, 22vh);
+    gap: 10px 14px;
+    padding-bottom: 10px;
+  }
+
+  .jh2-caption {
+    min-height: 1.4em;
+    font-size: 15px;
+    -webkit-line-clamp: 2;
+  }
+}
+
+@media (max-width: 1150px) {
+  .jh2 {
+    grid-template-columns: minmax(190px, 24vw) 1fr minmax(200px, 24vw);
+    gap: 10px 12px;
+    padding: 0 12px 12px;
+  }
+
+  .jh2-tagline {
+    display: none;
+  }
+}
+
+/* Une seule colonne laterale : sessions sous les systemes. */
+@media (max-width: 900px) {
+  .jh2 {
+    grid-template-columns: minmax(190px, 32vw) 1fr;
+    grid-template-rows: var(--top-h) 1fr 1fr minmax(110px, 22vh);
+    grid-template-areas:
+      "top top"
+      "left center"
+      "right center"
+      "bottom bottom";
+  }
+
+  .jh2-status span {
+    display: none;
+  }
+}
+
+/* Tres etroit : tout empile, le HUD defile. */
+@media (max-width: 620px) {
+  .jh2 {
+    grid-template-columns: minmax(0, 1fr);
+    /* max-content : les panneaux (overflow hidden) s'ecraseraient sinon a 0. */
+    grid-template-rows: var(--top-h) max(380px, min(70vh, 560px)) repeat(3, max-content);
+    grid-template-areas: "top" "center" "bottom" "left" "right";
+    overflow-y: auto;
+  }
+
+  .jh2-bottom {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .jh2-activity,
+  .jh2-journal,
+  .jh2-sessions {
+    max-height: 260px;
+  }
+
+  .jh2-clock span {
+    display: none;
+  }
+
+  .jh2-target {
+    max-width: 110px;
+  }
+}
+
+.jh2.focus {
+  overflow: hidden;
 }
 
 body.jarvis-hud-on:not(.jarvis-hud-focus) #appShell {
