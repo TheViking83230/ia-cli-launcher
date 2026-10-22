@@ -52,6 +52,9 @@ const elements = {
   promptsButton: document.getElementById("promptsButton"),
   conversationsButton: document.getElementById("conversationsButton"),
   jarvisButton: document.getElementById("jarvisButton"),
+  headerToolsButton: document.getElementById("headerToolsButton"),
+  toolbar: document.getElementById("toolbar"),
+  toolbarToggleButton: document.getElementById("toolbarToggleButton"),
   toggleSidebarButton: document.getElementById("toggleSidebarButton"),
   sessionMeta: document.getElementById("sessionMeta"),
   historyButton: document.getElementById("historyButton"),
@@ -189,6 +192,87 @@ function setSidebarCollapsed(collapsed) {
   const active = state.sessions.get(state.activeSessionId);
   if (active) {
     setTimeout(() => active.fitAddon.fit(), 180);
+  }
+}
+
+// --- Outils de l'onglet (en-tete) masquables ----------------------------------
+function setHeaderToolsHidden(hidden) {
+  elements.activeTitleInput.parentElement.classList.toggle("tools-hidden", hidden);
+  elements.headerToolsButton.title = hidden ? "Afficher les outils de l'onglet" : "Masquer les outils de l'onglet";
+  elements.headerToolsButton.innerHTML = `<i data-lucide="${hidden ? "chevrons-right" : "chevrons-left"}"></i>`;
+  window.localStorage.setItem("headerToolsHidden", hidden ? "1" : "0");
+  createIcons();
+}
+
+// Barre d'outils de droite masquable (le bouton JARVIS reste visible).
+function setToolbarHidden(hidden) {
+  elements.toolbar.classList.toggle("tools-hidden", hidden);
+  elements.toolbarToggleButton.title = hidden ? "Afficher la barre d'outils" : "Masquer la barre d'outils";
+  elements.toolbarToggleButton.innerHTML = `<i data-lucide="${hidden ? "chevrons-left" : "chevrons-right"}"></i>`;
+  window.localStorage.setItem("toolbarHidden", hidden ? "1" : "0");
+  createIcons();
+}
+
+// --- Sections repliables du menu lateral -----------------------------------------
+// Etat garde par titre de section ; "Profil actif" (reglages avances, peu
+// utilises) est replie par defaut.
+const PANELS_COLLAPSED_BY_DEFAULT = ["Profil actif"];
+
+function loadCollapsedPanels() {
+  try {
+    const saved = JSON.parse(window.localStorage.getItem("collapsedPanels"));
+    if (Array.isArray(saved)) {
+      return new Set(saved);
+    }
+  } catch {}
+  return new Set(PANELS_COLLAPSED_BY_DEFAULT);
+}
+
+function setupCollapsiblePanels() {
+  const collapsed = loadCollapsedPanels();
+  for (const panel of document.querySelectorAll(".sidebar .panel")) {
+    const title = panel.querySelector(":scope > .section-title");
+    if (!title) {
+      continue;
+    }
+    const name = title.textContent.trim();
+    const chevron = document.createElement("span");
+    chevron.className = "panel-chevron";
+    chevron.innerHTML = '<i data-lucide="chevron-down"></i>';
+    title.prepend(chevron);
+    title.classList.add("collapsible");
+    title.tabIndex = 0;
+    title.setAttribute("role", "button");
+
+    const apply = (isCollapsed) => {
+      panel.classList.toggle("collapsed", isCollapsed);
+      title.setAttribute("aria-expanded", String(!isCollapsed));
+      title.title = isCollapsed ? "Afficher la section" : "Replier la section";
+    };
+    const toggle = () => {
+      const next = !panel.classList.contains("collapsed");
+      apply(next);
+      if (next) {
+        collapsed.add(name);
+      } else {
+        collapsed.delete(name);
+      }
+      window.localStorage.setItem("collapsedPanels", JSON.stringify([...collapsed]));
+    };
+
+    apply(collapsed.has(name));
+    title.addEventListener("click", (event) => {
+      // Les boutons du titre (ex. actualiser les tokens) gardent leur action.
+      if (!event.target.closest("button")) {
+        toggle();
+      }
+    });
+    title.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" || event.key === " ") {
+        event.preventDefault();
+        toggle();
+      }
+    });
   }
 }
 
@@ -5307,6 +5391,12 @@ async function initJarvis() {
 // Notes de version affichees apres une mise a jour. La cle est le numero de
 // version, la valeur la liste des nouveautes a montrer.
 const CHANGELOG = {
+  "0.1.24": [
+    "Interface allégée : chaque section du menu latéral se replie d'un clic sur son titre (« Profil actif » est replié par défaut).",
+    "Le petit bouton ‹‹ à côté du titre de l'onglet masque Renommer, Redémarrer, Relais et Git ; le quota reste visible.",
+    "Le bouton ›› de la barre d'outils la replie (le réacteur reste visible) ; les raccourcis clavier fonctionnent toujours.",
+    "Tes choix d'affichage sont mémorisés."
+  ],
   "0.1.23": [
     "L'application démarre toujours sur l'interface classique, sans son : le module à réacteur ne se relance que lorsque tu le demandes."
   ],
@@ -5528,6 +5618,15 @@ async function init() {
   }
   bindEvents();
   setSidebarCollapsed(window.localStorage.getItem("sidebarCollapsed") === "1");
+  setupCollapsiblePanels();
+  setHeaderToolsHidden(window.localStorage.getItem("headerToolsHidden") === "1");
+  elements.headerToolsButton.addEventListener("click", () => {
+    setHeaderToolsHidden(!elements.activeTitleInput.parentElement.classList.contains("tools-hidden"));
+  });
+  setToolbarHidden(window.localStorage.getItem("toolbarHidden") === "1");
+  elements.toolbarToggleButton.addEventListener("click", () => {
+    setToolbarHidden(!elements.toolbar.classList.contains("tools-hidden"));
+  });
   updateFolder(window.localStorage.getItem("lastFolder") || "");
   renderProfiles();
   renderPersonas();

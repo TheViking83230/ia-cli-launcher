@@ -170,6 +170,9 @@
             <div class="eyebrow">Sessions</div>
             <div class="title-edit-row">
               <input id="activeTitleInput" class="active-title" type="text" value="Aucun onglet" disabled />
+              <button id="headerToolsButton" class="header-tools-toggle" type="button" title="Masquer les outils de l'onglet">
+                <i data-lucide="chevrons-left"></i>
+              </button>
               <button id="renameActiveTabButton" class="icon-button" type="button" title="Renommer l'onglet" disabled>
                 <i data-lucide="pencil"></i>
               </button>
@@ -183,7 +186,10 @@
               <div id="usageBar" class="usage-bar empty" aria-live="polite"></div>
             </div>
           </div>
-          <div class="toolbar">
+          <div id="toolbar" class="toolbar">
+            <button id="toolbarToggleButton" class="header-tools-toggle" type="button" title="Masquer la barre d'outils">
+              <i data-lucide="chevrons-right"></i>
+            </button>
             <button id="splitButton" class="icon-button" type="button" title="Vue partagée (deux onglets côte à côte)">
               <i data-lucide="columns-2"></i>
             </button>

@@ -434,9 +434,89 @@ select:focus {
 
 .title-edit-row {
   display: grid;
-  grid-template-columns: minmax(110px, 520px) 40px 40px auto auto minmax(0, auto);
+  grid-template-columns: minmax(110px, 520px) 26px 40px 40px auto auto minmax(0, auto);
   align-items: center;
   gap: 8px;
+}
+
+/* Outils de l'onglet masques : titre, bouton de bascule et quota seulement
+   (le bouton Redemarrer reste visible si une mise a jour d'IA attend). */
+.title-edit-row.tools-hidden {
+  grid-template-columns: minmax(110px, 520px) 26px auto minmax(0, auto);
+}
+
+.title-edit-row.tools-hidden #renameActiveTabButton,
+.title-edit-row.tools-hidden #restartAiButton:not(.has-update),
+.title-edit-row.tools-hidden #relaySelect,
+.title-edit-row.tools-hidden #gitChip {
+  display: none;
+}
+
+.header-tools-toggle {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--soft);
+}
+
+.header-tools-toggle:hover {
+  border-color: var(--line);
+  color: var(--text);
+}
+
+.header-tools-toggle svg {
+  width: 16px;
+  height: 16px;
+}
+
+/* Barre d'outils masquee : seuls le bouton de bascule et JARVIS restent. */
+.toolbar.tools-hidden > .icon-button:not(#jarvisButton) {
+  display: none;
+}
+
+/* Menu lateral replie : son bouton reste accessible pour le rouvrir. */
+.shell.sidebar-collapsed .toolbar.tools-hidden > #toggleSidebarButton {
+  display: inline-flex;
+}
+
+/* Sections repliables du menu lateral (clic sur le titre). */
+.sidebar .section-title.collapsible {
+  cursor: pointer;
+  user-select: none;
+}
+
+.sidebar .section-title.collapsible:hover,
+.sidebar .section-title.collapsible:focus-visible {
+  color: var(--text);
+  outline: none;
+}
+
+.panel-chevron {
+  display: inline-flex;
+  margin-right: -2px;
+  transition: transform 0.15s ease;
+}
+
+.panel-chevron svg {
+  width: 14px;
+  height: 14px;
+}
+
+.panel.collapsed {
+  gap: 0;
+}
+
+.panel.collapsed .panel-chevron {
+  transform: rotate(-90deg);
+}
+
+.panel.collapsed > :not(.section-title) {
+  display: none !important;
 }
 
 .active-title {
