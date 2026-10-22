@@ -16,6 +16,7 @@ const jarvis = require("./jarvis");
 const clipboardImage = require("./clipboardImage");
 const piper = require("./piper");
 const whisper = require("./whisper");
+const qualityVoice = require("./qualityVoice");
 
 // Sous Linux, certaines distributions recentes (Ubuntu 24.04+) bloquent les
 // "user namespaces" non privilegies : le sandbox Chromium ne peut alors pas
@@ -1044,6 +1045,16 @@ app.whenReady().then(() => {
   ipcMain.handle("voice:transcribe", (_event, { wavBytes, prompt }) => whisper.transcribe(wavBytes, prompt));
   ipcMain.handle("voice:wakeword", () => whisper.wakewordAssets());
   ipcMain.on("voice:log", (_event, line) => whisper.logListening(line));
+  ipcMain.handle("voice:quality-status", () => qualityVoice.status());
+  ipcMain.handle("voice:quality-install", (event) =>
+    qualityVoice.installPack((progress) => !event.sender.isDestroyed() && event.sender.send("voice:quality-progress", progress))
+  );
+  ipcMain.handle("voice:quality-uninstall", () => qualityVoice.uninstallPack());
+  ipcMain.handle("voice:quality-speak", (event, { id, text }) =>
+    qualityVoice.speak(text, (chunk) => !event.sender.isDestroyed() && event.sender.send("voice:quality-chunk", { id, ...chunk }))
+  );
+  ipcMain.on("voice:quality-stop", () => qualityVoice.stopSpeaking());
+  ipcMain.on("voice:quality-prepare", () => qualityVoice.prepare());
   ipcMain.handle("terminal:last-reply", (_event, id) => {
     const session = sessions.get(id);
     if (!session) {
@@ -1451,6 +1462,8 @@ app.on("before-quit", (event) => {
     new Promise((resolve) => setTimeout(resolve, 8000))
   ]).finally(() => app.quit());
 });
+
+app.on("will-quit", () => qualityVoice.stopServer());
 
 app.on("window-all-closed", () => {
   if (process.platform !== "darwin") {

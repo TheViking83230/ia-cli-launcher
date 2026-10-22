@@ -50,6 +50,22 @@ contextBridge.exposeInMainWorld("launcher", {
   voiceTranscribe: (wavBytes, prompt) => ipcRenderer.invoke("voice:transcribe", { wavBytes, prompt }),
   voiceWakeword: () => ipcRenderer.invoke("voice:wakeword"),
   voiceLog: (line) => ipcRenderer.send("voice:log", line),
+  qualityVoiceStatus: () => ipcRenderer.invoke("voice:quality-status"),
+  qualityVoiceInstall: () => ipcRenderer.invoke("voice:quality-install"),
+  qualityVoiceUninstall: () => ipcRenderer.invoke("voice:quality-uninstall"),
+  qualityVoiceSpeak: (id, text) => ipcRenderer.invoke("voice:quality-speak", { id, text }),
+  qualityVoiceStop: () => ipcRenderer.send("voice:quality-stop"),
+  qualityVoicePrepare: () => ipcRenderer.send("voice:quality-prepare"),
+  onQualityVoiceProgress: (handler) => {
+    const listener = (_event, payload) => handler(payload);
+    ipcRenderer.on("voice:quality-progress", listener);
+    return () => ipcRenderer.off("voice:quality-progress", listener);
+  },
+  onQualityVoiceChunk: (handler) => {
+    const listener = (_event, payload) => handler(payload);
+    ipcRenderer.on("voice:quality-chunk", listener);
+    return () => ipcRenderer.off("voice:quality-chunk", listener);
+  },
   getLastReply: (id) => ipcRenderer.invoke("terminal:last-reply", id),
   onJarvisMenu: (handler) => {
     const listener = () => handler();

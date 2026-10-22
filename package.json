@@ -1,6 +1,6 @@
 {
   "name": "ia-cli-launcher",
-  "version": "0.1.27",
+  "version": "0.1.28",
   "description": "Lanceur Windows admin avec onglets terminal pour CLI IA.",
   "author": "Dev OpA",
   "homepage": "https://devopa.fr",
@@ -89,6 +89,14 @@
       {
         "from": "vendor/wakeword",
         "to": "wakeword"
+      },
+      {
+        "from": "voice-quality",
+        "to": "voice-quality",
+        "filter": [
+          "server.py",
+          "reference.wav"
+        ]
       }
     ],
     "win": {

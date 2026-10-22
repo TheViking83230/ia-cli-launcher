@@ -3213,6 +3213,37 @@ body.jarvis-dictating .jarvis-button {
   font-size: 13px;
 }
 
+.jarvis-quality {
+  display: grid;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid rgba(56, 232, 255, 0.25);
+  border-radius: 8px;
+  color: #9fc3d3;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.jarvis-quality button {
+  justify-self: start;
+}
+
+.jarvis-quality-bar {
+  height: 6px;
+  overflow: hidden;
+  border-radius: 3px;
+  background: rgba(56, 232, 255, 0.12);
+}
+
+.jarvis-quality-bar span {
+  display: block;
+  width: 0;
+  height: 100%;
+  background: #38e8ff;
+  box-shadow: 0 0 8px #38e8ff;
+  transition: width 0.6s ease;
+}
+
 .jarvis-voice-note {
   min-height: 16px;
   color: #f6c85f;

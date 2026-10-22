@@ -42,3 +42,16 @@ Le modele d'embedding est derive d'un modele Google (Apache 2.0).
 
 Execution des modeles : ONNX Runtime Web (onnxruntime-web)
 https://github.com/microsoft/onnxruntime - licence MIT
+
+------------------------------------------------------------------------
+Voix « qualite » (optionnelle, installee depuis la fenetre JARVIS sur les
+PC equipes d'une carte graphique NVIDIA ; rien n'est inclus dans
+l'installeur hormis le script du serveur et l'extrait de voix de reference)
+Modele Qwen3-TTS-12Hz-0.6B-Base : licence Apache 2.0
+  Source : https://huggingface.co/Qwen/Qwen3-TTS-12Hz-0.6B-Base
+Moteur faster-qwen3-tts : licence MIT
+  Source : https://github.com/andimarafioti/faster-qwen3-tts
+PyTorch : licence BSD ; Python : licence PSF.
+La voix de reference (voice-quality/reference.wav) a ete creee avec
+Qwen3-TTS VoiceDesign a partir d'une description : ce n'est la voix
+d'aucune personne reelle.

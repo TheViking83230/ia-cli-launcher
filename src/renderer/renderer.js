@@ -5136,7 +5136,9 @@ const JARVIS_INTRO_MAX_MS = 20000;
 const jarvis = { installed: false, active: false, playing: false };
 
 // Reglages de la voix (voix choisie, debit, grave, effets), par PC.
-const JARVIS_VOICE_DEFAULTS = { voice: "tom", speed: 1.15, pitch: 0.14, metal: 0.35, echo: 0.3 };
+// engine : "tom" (Piper, processeur) ou "quality" (Qwen3-TTS, carte graphique).
+// La voix qualite, deja grave, a ses propres reglages d'effets (q*).
+const JARVIS_VOICE_DEFAULTS = { engine: "tom", voice: "tom", speed: 1.15, pitch: 0.14, metal: 0.35, echo: 0.3, qPitch: 0, qMetal: 0.2, qEcho: 0.2 };
 
 function loadJarvisVoiceSettings() {
   try {
@@ -5144,6 +5146,11 @@ function loadJarvisVoiceSettings() {
   } catch {
     return { ...JARVIS_VOICE_DEFAULTS };
   }
+}
+
+// Effets du moteur choisi (pitch, metal, echo).
+function jarvisVoiceFx(settings) {
+  return settings.engine === "quality" ? { ...settings, pitch: settings.qPitch, metal: settings.qMetal, echo: settings.qEcho } : settings;
 }
 
 function saveJarvisVoiceSettings(settings) {
@@ -5220,7 +5227,8 @@ function toggleJarvisAutoRead() {
 }
 
 // Markdown -> texte a dire : le code n'est pas lu, la mise en forme est retiree.
-function textForSpeech(markdown) {
+// phonetic : orthographe adaptee a Tom (la voix qualite lit l'anglais telle quelle).
+function textForSpeech(markdown, phonetic = true) {
   return String(markdown || "")
     .replace(/```[\s\S]*?```/g, "\n(bloc de code)\n")
     .replace(/`([^`\n]+)`/g, "$1")
@@ -5235,6 +5243,9 @@ function textForSpeech(markdown) {
     .replace(/(\*\*|__|\*|_|~~)(\S[^\n]*?)\1/g, "$2")
     .replace(/[ \t]+/g, " ")
     .replace(/\n{2,}/g, "\n")
+    .split("\n")
+    .map((line) => window.JarvisPronounce.pronounce(line, { phonetic }))
+    .join("\n")
     .trim();
 }
 
@@ -5262,6 +5273,8 @@ function stopJarvisSpeech() {
   jarvisVoice.token += 1;
   jarvisVoice.audio?.pause();
   jarvisVoice.audio = null;
+  jarvisVoice.player?.stop();
+  jarvisVoice.player = null;
   window.speechSynthesis?.cancel();
   if (jarvisVoice.speaking) {
     jarvisVoice.speaking = false;
@@ -5306,21 +5319,137 @@ function speakWithWindowsVoice(text) {
   });
 }
 
+// --- Voix qualite (Qwen3-TTS sur carte graphique) : audio recu en flux --------
+const qualityStreams = new Map();
+let qualityRequestId = 0;
+window.launcher.onQualityVoiceChunk((chunk) => qualityStreams.get(chunk.id)?.(chunk));
+
+// Lecteur en flux : enchaine les morceaux d'audio sans blanc, a travers les
+// effets de JARVIS. say() se resout quand la phrase est generee (la suivante
+// est alors demandee pendant la lecture), finished() a la fin du son.
+function createQualityPlayer(ctx, settings) {
+  const fx = jarvisVoiceFx(settings);
+  const rate = 1 - fx.pitch;
+  const input = ctx.createGain();
+  const analyser = ctx.createAnalyser();
+  analyser.fftSize = 256;
+  buildJarvisVoiceChain(ctx, input, fx).connect(analyser);
+  analyser.connect(ctx.destination);
+  const sources = new Set();
+  let at = 0;
+  let stopped = false;
+  return {
+    analyser,
+    say(text, onPlay) {
+      const id = (qualityRequestId += 1);
+      let first = true;
+      qualityStreams.set(id, ({ sampleRate, pcm }) => {
+        if (stopped) {
+          return;
+        }
+        const samples = new Int16Array(new Uint8Array(pcm).buffer);
+        const buffer = ctx.createBuffer(1, samples.length, sampleRate);
+        const data = buffer.getChannelData(0);
+        for (let i = 0; i < samples.length; i += 1) {
+          data[i] = samples[i] / 32768;
+        }
+        const source = ctx.createBufferSource();
+        source.buffer = buffer;
+        source.playbackRate.value = rate;
+        source.connect(input);
+        source.onended = () => sources.delete(source);
+        // Petite avance pour absorber les irregularites du flux.
+        at = Math.max(at, ctx.currentTime + 0.1);
+        if (first) {
+          first = false;
+          window.setTimeout(() => !stopped && onPlay?.(analyser), (at - ctx.currentTime) * 1000);
+        }
+        source.start(at);
+        sources.add(source);
+        at += buffer.duration / rate;
+      });
+      return window.launcher
+        .qualityVoiceSpeak(id, text)
+        .catch((error) => ({ error: error.message }))
+        .finally(() => qualityStreams.delete(id));
+    },
+    finished() {
+      return new Promise((resolve) => {
+        const check = () => (stopped || ctx.currentTime >= at + 0.3 ? resolve() : window.setTimeout(check, 100));
+        check();
+      });
+    },
+    stop() {
+      if (stopped) {
+        return;
+      }
+      stopped = true;
+      window.launcher.qualityVoiceStop();
+      for (const source of sources) {
+        try {
+          source.stop();
+        } catch {
+          // deja termine
+        }
+      }
+      sources.clear();
+    }
+  };
+}
+
+// Lit les morceaux avec la voix qualite. Renvoie false si elle n'a rien pu dire
+// (pack absent, carte indisponible...) : Tom prend alors le relais.
+async function speakJarvisQuality(chunks, settings, token) {
+  const player = createQualityPlayer(jarvisAudioContext(), settings);
+  jarvisVoice.player = player;
+  let spoken = false;
+  for (const chunk of chunks) {
+    const result = await player.say(chunk, (analyser) => {
+      if (token === jarvisVoice.token) {
+        showJarvisHud("JARVIS", chunk, true);
+        setJarvisCoreState("speaking", analyser);
+      }
+    });
+    if (token !== jarvisVoice.token) {
+      return true;
+    }
+    if (result?.error) {
+      jarvisLog(`voix qualite : ${result.error}`);
+      if (!spoken) {
+        player.stop();
+        return false;
+      }
+      break;
+    }
+    spoken = true;
+  }
+  await player.finished();
+  return true;
+}
+
 // Dit un texte avec la voix de JARVIS (interrompt la lecture en cours).
 async function speakJarvis(text) {
   stopJarvisSpeech();
   const token = jarvisVoice.token;
-  const chunks = splitForSpeech(textForSpeech(text));
+  const settings = loadJarvisVoiceSettings();
+  const quality = settings.engine === "quality";
+  let chunks = splitForSpeech(textForSpeech(text, !quality));
   if (!chunks.length) {
     return;
   }
-  const settings = loadJarvisVoiceSettings();
-  const synth = (chunk) =>
-    window.launcher.voiceSpeak({ text: chunk, voiceId: settings.voice, lengthScale: (1 - settings.pitch) / settings.speed });
   jarvisVoice.speaking = true;
   showJarvisHud("JARVIS", chunks[0], true);
   setJarvisCoreState("thinking");
-  let next = synth(chunks[0]).catch(() => null);
+  if (quality) {
+    const done = await speakJarvisQuality(chunks, settings, token);
+    if (token !== jarvisVoice.token) {
+      return;
+    }
+    chunks = done ? [] : splitForSpeech(textForSpeech(text, true));
+  }
+  const synth = (chunk) =>
+    window.launcher.voiceSpeak({ text: chunk, voiceId: settings.voice, lengthScale: (1 - settings.pitch) / settings.speed });
+  let next = chunks.length ? synth(chunks[0]).catch(() => null) : null;
   for (let i = 0; i < chunks.length; i += 1) {
     const result = await next;
     if (token !== jarvisVoice.token) {
@@ -5337,6 +5466,7 @@ async function speakJarvis(text) {
       return;
     }
   }
+  jarvisVoice.player = null;
   jarvisVoice.speaking = false;
   setJarvisCoreState("idle");
   hideJarvisHud(600);
@@ -6008,6 +6138,10 @@ function applyJarvisMode(active) {
   if (active && !jarvis.core) {
     jarvis.core = new window.JarvisCore(elements.jarvisButton, { size: 32 });
     svg.classList.add("hidden");
+    // Voix qualite : modele charge a l'avance (~15 s) pour repondre sans attendre.
+    if (loadJarvisVoiceSettings().engine === "quality") {
+      window.launcher.qualityVoicePrepare();
+    }
   } else if (!active && jarvis.core) {
     cancelJarvisInteraction();
     stopJarvisListener();
@@ -6308,9 +6442,12 @@ function openJarvisCorePreview() {
   let audioContext = null;
   let micStream = null;
   let voice = null;
+  let qualityPlayer = null;
 
   function stopSources() {
     core.setAnalyser(null);
+    qualityPlayer?.stop();
+    qualityPlayer = null;
     micStream?.getTracks().forEach((track) => track.stop());
     micStream = null;
     if (voice) {
@@ -6409,11 +6546,39 @@ function openJarvisCorePreview() {
     window.speechSynthesis.speak(utterance);
   }
 
+  // Renvoie false si la voix qualite n'a rien pu dire (Tom prend le relais).
+  async function sayWithQuality(text) {
+    audioContext ??= new AudioContext();
+    const player = createQualityPlayer(audioContext, settings);
+    qualityPlayer = player;
+    const started = Date.now();
+    const result = await player.say(window.JarvisPronounce.pronounce(text, { phonetic: false }), (analyser) => {
+      core.setAnalyser(analyser);
+      core.setState("speaking");
+      label.textContent = `JARVIS parle (voix qualité, premier son en ${((Date.now() - started) / 1000).toFixed(1)} s)`;
+    });
+    if (qualityPlayer !== player) {
+      return true;
+    }
+    if (result?.error) {
+      voiceNote.textContent = `Voix qualité indisponible (${result.error}) : voix Tom utilisée.`;
+      return false;
+    }
+    await player.finished();
+    if (qualityPlayer === player && core.state === "speaking") {
+      setState("idle");
+    }
+    return true;
+  }
+
   async function sayText(text) {
     stopSources();
     core.setState("thinking");
-    label.textContent = "Génération de la voix…";
+    label.textContent = settings.engine === "quality" ? "Démarrage de la voix qualité…" : "Génération de la voix…";
     voiceNote.textContent = "";
+    if (settings.engine === "quality" && (await sayWithQuality(text))) {
+      return;
+    }
     // Voix plus grave = lecture ralentie ; la diction est generee plus vite
     // d'autant pour garder le meme debit.
     const rate = 1 - settings.pitch;
@@ -6471,6 +6636,10 @@ function openJarvisCorePreview() {
 
   async function renderVoicePanel() {
     voiceStatus = await window.launcher.voiceStatus();
+    const quality = await window.launcher.qualityVoiceStatus();
+    if (settings.engine === "quality" && !quality.installed) {
+      settings.engine = "tom";
+    }
     voicePanel.innerHTML = "";
     if (!voiceStatus.engine || !voiceStatus.voices.length) {
       voiceNote.textContent = "Voix de JARVIS absente de cette installation : voix de Windows utilisée.";
@@ -6478,8 +6647,19 @@ function openJarvisCorePreview() {
 
     const voiceRow = document.createElement("div");
     voiceRow.className = "jarvis-voice-row";
+    if (quality.installed) {
+      const engine = document.createElement("select");
+      engine.innerHTML = '<option value="tom">Voix : Tom (processeur)</option><option value="quality">Voix : qualité (carte graphique)</option>';
+      engine.value = settings.engine;
+      engine.addEventListener("change", () => {
+        settings.engine = engine.value;
+        saveJarvisVoiceSettings(settings);
+        renderVoicePanel();
+      });
+      voiceRow.appendChild(engine);
+    }
     const current = voiceStatus.voices.find((item) => item.id === settings.voice) || voiceStatus.voices[0];
-    if (voiceStatus.voices.length > 1) {
+    if (voiceStatus.voices.length > 1 && settings.engine !== "quality") {
       const select = document.createElement("select");
       for (const item of voiceStatus.voices) {
         const option = document.createElement("option");
@@ -6498,7 +6678,12 @@ function openJarvisCorePreview() {
 
     const license = document.createElement("div");
     license.className = "jarvis-voice-license";
-    license.textContent = current ? `${current.label} · ${current.license} · synthèse Piper, 100 % locale` : "";
+    license.textContent =
+      settings.engine === "quality"
+        ? "Voix qualité · Qwen3-TTS 0.6B (Apache 2.0) · carte graphique, 100 % locale"
+        : current
+          ? `${current.label} · ${current.license} · synthèse Piper, 100 % locale`
+          : "";
 
     const testRow = document.createElement("div");
     testRow.className = "jarvis-voice-row";
@@ -6514,15 +6699,100 @@ function openJarvisCorePreview() {
 
     const sliders = document.createElement("div");
     sliders.className = "jarvis-voice-sliders";
-    sliders.append(
-      slider("Débit", "speed", 0.7, 1.4, 0.05, (v) => `${Math.round(v * 100)} %`),
-      slider("Grave", "pitch", 0, 0.25, 0.01, (v) => `${Math.round(v * 100)} %`),
-      slider("Métal", "metal", 0, 1, 0.05, (v) => `${Math.round(v * 100)} %`),
-      slider("Écho", "echo", 0, 1, 0.05, (v) => `${Math.round(v * 100)} %`)
-    );
+    const percent = (v) => `${Math.round(v * 100)} %`;
+    if (settings.engine === "quality") {
+      sliders.append(
+        slider("Grave", "qPitch", 0, 0.25, 0.01, percent),
+        slider("Métal", "qMetal", 0, 1, 0.05, percent),
+        slider("Écho", "qEcho", 0, 1, 0.05, percent)
+      );
+    } else {
+      sliders.append(
+        slider("Débit", "speed", 0.7, 1.4, 0.05, percent),
+        slider("Grave", "pitch", 0, 0.25, 0.01, percent),
+        slider("Métal", "metal", 0, 1, 0.05, percent),
+        slider("Écho", "echo", 0, 1, 0.05, percent)
+      );
+    }
 
-    voicePanel.append(voiceRow, license, sliders, testRow, voiceNote);
+    voicePanel.append(voiceRow, license, sliders, testRow, qualityVoicePanel(quality), voiceNote);
   }
+  // Installation de la voix qualite (pack telecharge une fois, hors de l'appli).
+  function qualityVoicePanel(quality) {
+    const box = document.createElement("div");
+    box.className = "jarvis-quality";
+    if (!quality.supported || !quality.gpu) {
+      box.textContent = quality.supported
+        ? "Voix qualité : demande une carte graphique NVIDIA (aucune détectée)."
+        : "Voix qualité : disponible pour l'instant sous Windows uniquement.";
+      return box;
+    }
+    const info = document.createElement("div");
+    const bar = document.createElement("div");
+    bar.className = "jarvis-quality-bar";
+    const fill = document.createElement("span");
+    bar.appendChild(fill);
+    const button = document.createElement("button");
+    button.type = "button";
+    const showProgress = ({ percent, step, error }) => {
+      bar.hidden = false;
+      fill.style.width = `${percent || 0}%`;
+      info.textContent = error ? `Échec de l'installation : ${error}` : `Installation de la voix qualité : ${step} (${percent || 0} %)`;
+    };
+    bar.hidden = true;
+    if (quality.installing) {
+      showProgress(quality);
+      button.hidden = true;
+      const off = window.launcher.onQualityVoiceProgress((progress) => {
+        showProgress(progress);
+        if (progress.done) {
+          off();
+          if (modal.overlay.isConnected) {
+            renderVoicePanel();
+          }
+        }
+      });
+    } else if (quality.installed) {
+      info.textContent = `Voix qualité installée (${quality.gpu.name}).`;
+      button.className = "ghost-button danger";
+      button.textContent = "Désinstaller";
+      button.addEventListener("click", async () => {
+        if (!window.confirm("Désinstaller la voix qualité (environ 9 Go libérés) ?")) {
+          return;
+        }
+        settings.engine = "tom";
+        saveJarvisVoiceSettings(settings);
+        await window.launcher.qualityVoiceUninstall();
+        renderVoicePanel();
+      });
+    } else {
+      info.textContent = quality.error
+        ? `Échec de la dernière installation : ${quality.error}`
+        : `Voix qualité : plus naturelle, calculée par ta carte graphique (${quality.gpu.name}). Téléchargement unique d'environ 6 Go (9 Go sur le disque).`;
+      if (!quality.enoughMemory) {
+        info.textContent += " Attention : moins de 4 Go de mémoire graphique, la voix risque de ne pas fonctionner.";
+      }
+      button.className = "primary-button";
+      button.textContent = "Installer la voix qualité";
+      button.addEventListener("click", async () => {
+        button.hidden = true;
+        showProgress({ percent: 0, step: "préparation" });
+        const off = window.launcher.onQualityVoiceProgress(showProgress);
+        const result = await window.launcher.qualityVoiceInstall().catch((error) => ({ error: error.message }));
+        off();
+        if (result?.ok) {
+          settings.engine = "quality";
+          saveJarvisVoiceSettings(settings);
+        }
+        if (modal.overlay.isConnected) {
+          renderVoicePanel();
+        }
+      });
+    }
+    box.append(info, bar, button);
+    return box;
+  }
+
   renderVoicePanel();
 
   // Liberation du micro, du son et de l'animation a la fermeture.
@@ -6584,6 +6854,10 @@ async function initJarvis() {
 // Notes de version affichees apres une mise a jour. La cle est le numero de
 // version, la valeur la liste des nouveautes a montrer.
 const CHANGELOG = {
+  "0.1.28": [
+    "Le module à réacteur peut prendre une voix bien plus naturelle, calculée par la carte graphique (NVIDIA) : installation en un clic depuis sa fenêtre, premier mot en moins d'une seconde.",
+    "Meilleure prononciation : versions, fichiers, raccourcis, unités et termes techniques sont lus correctement."
+  ],
   "0.1.27": [
     "Le module à réacteur vous écoute : dites « OK Jarvis » (ou « Dis Jarvis », « Hey Jarvis ») puis votre demande, elle part à l'IA dès que vous vous taisez. Tout est analysé sur ce PC.",
     "Grand réacteur au centre de l'écran pendant l'écoute et la lecture, avec sous-titres ; Échap ou clic pour annuler.",

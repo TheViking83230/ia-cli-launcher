@@ -7,7 +7,7 @@ mkdir -p /build
 cd /src
 # Copie sur le systeme de fichiers du conteneur (bit SUID de chrome-sandbox),
 # sans les dependances Windows ni les artefacts.
-tar -cf - package.json package-lock.json src build scripts | tar -xf - -C /build
+tar -cf - package.json package-lock.json src build scripts voice-quality | tar -xf - -C /build
 # Voix de JARVIS deja recuperees cote Windows : reutilisees telles quelles.
 for dir in vendor/piper/voices vendor/whisper/models vendor/wakeword/models; do
   if [ -d "$dir" ]; then
