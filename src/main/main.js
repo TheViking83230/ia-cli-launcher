@@ -15,6 +15,7 @@ const gitInfo = require("./gitInfo");
 const jarvis = require("./jarvis");
 const clipboardImage = require("./clipboardImage");
 const piper = require("./piper");
+const whisper = require("./whisper");
 
 // Sous Linux, certaines distributions recentes (Ubuntu 24.04+) bloquent les
 // "user namespaces" non privilegies : le sandbox Chromium ne peut alors pas
@@ -875,6 +876,17 @@ function startShellSession(request) {
   // identifiant correspond deja a une session vivante.
   const resumeId = String(request.resumeId || "").trim();
   const id = resumeId && !sessions.has(resumeId) ? resumeId : crypto.randomUUID();
+  // Variables propres a une session Claude Code (les reglages de l'utilisateur,
+  // ex. CLAUDE_CODE_USE_BEDROCK, sont conserves).
+  const CLAUDE_SESSION_ENV = new Set([
+    "CLAUDECODE", "CLAUDE_PID", "CLAUDE_CODE_CHILD_SESSION", "CLAUDE_CODE_SESSION_ID", "CLAUDE_CODE_SESSION_ATTENDED",
+    "CLAUDE_CODE_MESSAGING_SOCKET", "CLAUDE_CODE_MESSAGING_TOKEN", "CLAUDE_CODE_ENTRYPOINT", "CLAUDE_CODE_EXECPATH"
+  ]);
+  // Lanceur demarre depuis un terminal Claude Code (ex. npm start) : sans ce
+  // nettoyage, le Claude de l'onglet se croit une sous-session et n'ecrit ni
+  // sa conversation ni son etat (lecture JARVIS, quotas, contexte...).
+  const terminalEnv = () =>
+    Object.fromEntries(Object.entries(process.env).filter(([key]) => !CLAUDE_SESSION_ENV.has(key)));
   const { command: shellCommand, args: shellArgs } = platform.getShell(commandLine);
 
   const ptyProcess = pty.spawn(shellCommand, shellArgs, {
@@ -883,7 +895,7 @@ function startShellSession(request) {
     rows: Number(request.rows) || 30,
     cwd,
     env: {
-      ...process.env,
+      ...terminalEnv(),
       FORCE_COLOR: "1",
       TERM: "xterm-256color"
     }
@@ -1029,6 +1041,21 @@ app.whenReady().then(() => {
   ipcMain.handle("jarvis:set", (_event, patch) => jarvis.setState(patch));
   ipcMain.handle("voice:status", () => piper.status());
   ipcMain.handle("voice:speak", (_event, request) => piper.speak(request || {}));
+  ipcMain.handle("voice:transcribe", (_event, { wavBytes, prompt }) => whisper.transcribe(wavBytes, prompt));
+  ipcMain.handle("voice:wakeword", () => whisper.wakewordAssets());
+  ipcMain.on("voice:log", (_event, line) => whisper.logListening(line));
+  ipcMain.handle("terminal:last-reply", (_event, id) => {
+    const session = sessions.get(id);
+    if (!session) {
+      return null;
+    }
+    return conversation.getLastReply({
+      profileId: session.profileId,
+      pid: session.pty?.pid,
+      cwd: session.cwd,
+      startedAt: session.startedAt
+    });
+  });
 
   ipcMain.handle("config:get", () => readConfig());
   ipcMain.handle("config:save", (_event, config) => writeConfig(config));

@@ -30,4 +30,29 @@ const VOICES = [
   }
 ];
 
-module.exports = { ENGINE_URLS, VOICES_BASE, VOICES };
+// Reconnaissance vocale (dictee) : whisper.cpp, executable et modele embarques.
+const WHISPER = {
+  urls: {
+    win32: "https://github.com/ggml-org/whisper.cpp/releases/download/b5454/whisper-bin-x64.zip",
+    linux: "https://github.com/ggml-org/whisper.cpp/releases/download/b5454/whisper-bin-ubuntu-x64.tar.gz"
+  },
+  // Chemin de l'executable dans l'archive extraite.
+  exe: {
+    win32: "Release/whisper-cli.exe",
+    linux: "whisper-bin-ubuntu-x64/whisper-cli"
+  },
+  // Modele "base" quantifie : 57 Mo, transcription francaise fiable et rapide
+  // sans carte graphique.
+  model: "ggml-base-q5_1.bin",
+  modelUrl: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base-q5_1.bin"
+};
+
+// Mot d'activation « Hey Jarvis » : modeles openWakeWord (executes dans la
+// fenetre par onnxruntime-web, dont les fichiers sont copies depuis node_modules).
+const WAKEWORD = {
+  modelsBase: "https://github.com/dscripka/openWakeWord/releases/download/v0.5.1",
+  models: { mel: "melspectrogram.onnx", embedding: "embedding_model.onnx", wakeword: "hey_jarvis_v0.1.onnx" },
+  ortFiles: ["ort.wasm.min.js", "ort-wasm-simd-threaded.mjs", "ort-wasm-simd-threaded.wasm"]
+};
+
+module.exports = { ENGINE_URLS, VOICES_BASE, VOICES, WHISPER, WAKEWORD };

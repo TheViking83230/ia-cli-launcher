@@ -395,9 +395,96 @@ async function getLiveStatus({ profileId, pid, cwd, startedAt }) {
   };
 }
 
+// --- Derniere reponse de l'IA (lecture a voix haute par JARVIS) -------------
+// Reponse finale du dernier tour : textes de l'assistant apres sa derniere
+// action (Claude : blocs "text" ; Codex : dernier "agent_message").
+function claudeLastReply(file) {
+  const lines = readTail(file, 2 * 1024 * 1024).split("\n");
+  const parts = [];
+  let id = "";
+  for (let i = lines.length - 1; i >= 0; i -= 1) {
+    let entry;
+    try {
+      entry = JSON.parse(lines[i]);
+    } catch {
+      continue;
+    }
+    if (entry.isSidechain || entry.isMeta) {
+      continue;
+    }
+    const content = entry.message?.content;
+    if (entry.type === "user") {
+      // Message tape : debut du tour. Resultat d'outil apres du texte deja
+      // collecte : la reponse finale commence apres cette derniere action.
+      const typed = typeof content === "string" || (Array.isArray(content) && content.some((block) => block.type === "text"));
+      if (typed || parts.length) {
+        break;
+      }
+    } else if (entry.type === "assistant" && Array.isArray(content)) {
+      const text = content.filter((block) => block.type === "text").map((block) => block.text).join("\n").trim();
+      if (text) {
+        parts.unshift(text);
+        id ||= String(entry.uuid || entry.message?.id || "");
+      }
+    }
+  }
+  return parts.length ? { id, text: parts.join("\n\n") } : null;
+}
+
+function codexLastReply(file) {
+  const lines = readTail(file, 2 * 1024 * 1024).split("\n");
+  const parts = [];
+  for (let i = lines.length - 1; i >= 0; i -= 1) {
+    let payload;
+    try {
+      payload = JSON.parse(lines[i])?.payload;
+    } catch {
+      continue;
+    }
+    if (payload?.type === "user_message") {
+      break;
+    }
+    if (payload?.type === "agent_message" && payload.message) {
+      parts.unshift(String(payload.message));
+      break;
+    }
+  }
+  const text = parts.join("\n\n").trim();
+  return text ? { id: `${file}:${lines.length}:${text.length}`, text } : null;
+}
+
+// Renvoie { id, text } (id : pour ne pas relire la meme reponse) ou null.
+// { id, text } ou { error } (raison, pour le journal de JARVIS).
+async function getLastReply({ profileId, pid, cwd, startedAt }) {
+  try {
+    if (profileId === "claude" && pid) {
+      const live = await claudeLive(Number(pid), cwd);
+      if (!live.conversationId) {
+        return { error: "processus Claude introuvable" };
+      }
+      const file = claudeConversationFile(live.conversationId, cwd);
+      if (!file) {
+        return { error: `conversation ${live.conversationId} introuvable` };
+      }
+      return claudeLastReply(file) || { error: "pas de texte dans le dernier tour" };
+    }
+    if (profileId === "codex" && pid && cwd && startedAt) {
+      codexLive(Number(pid), cwd, Number(startedAt));
+      const file = liveCache.get(Number(pid))?.file;
+      if (!file) {
+        return { error: "conversation Codex introuvable" };
+      }
+      return codexLastReply(file) || { error: "pas de texte dans le dernier tour" };
+    }
+    return { error: `profil « ${profileId} » non pris en charge` };
+  } catch (error) {
+    return { error: error.message };
+  }
+}
+
 // Oubli du cache d'un terminal ferme.
 function forgetLive(pid) {
   liveCache.delete(Number(pid));
 }
 
-module.exports = { getConversationInfo, getLiveStatus, forgetLive };
+module.exports = { getConversationInfo, getLiveStatus, getLastReply, forgetLive };

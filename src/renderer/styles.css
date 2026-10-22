@@ -2680,6 +2680,112 @@ select:focus {
   animation: arc-pulse 2.4s ease-in-out infinite;
 }
 
+.jarvis-button .arc-reactor.hidden {
+  display: none;
+}
+
+.jarvis-button .jarvis-core {
+  pointer-events: none;
+}
+
+/* Mot d'activation ecoute : petit point vivant sur le reacteur. */
+body.jarvis-wake .jarvis-button {
+  position: relative;
+}
+
+body.jarvis-wake .jarvis-button::after {
+  content: "";
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #38e8ff;
+  box-shadow: 0 0 6px #38e8ff;
+  animation: jh-blink 2.4s ease-in-out infinite;
+}
+
+/* Commande vocale en cours : le reacteur s'entoure d'un halo. */
+body.jarvis-dictating .jarvis-button {
+  border-color: #38e8ff;
+  box-shadow: 0 0 14px rgba(56, 232, 255, 0.55);
+}
+
+/* Grand reacteur central (ecoute, transcription, lecture). */
+.jarvis-hud {
+  position: fixed;
+  inset: 0;
+  z-index: 900;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  padding: 24px 16px;
+  background: radial-gradient(circle at 50% 45%, rgba(4, 22, 34, 0.82), rgba(2, 8, 14, 0.9) 70%);
+  backdrop-filter: blur(3px);
+  opacity: 0;
+  transition: opacity 0.25s ease, background 0.25s ease;
+  cursor: pointer;
+}
+
+.jarvis-hud.visible {
+  opacity: 1;
+}
+
+/* Pendant la lecture : fond leger, l'interface reste utilisable. */
+.jarvis-hud.passive {
+  background: radial-gradient(circle at 50% 45%, rgba(4, 22, 34, 0.55), transparent 60%);
+  backdrop-filter: none;
+  pointer-events: none;
+}
+
+.jarvis-hud.passive .jh-core {
+  pointer-events: auto;
+}
+
+.jarvis-hud.passive .jh-hint {
+  display: none;
+}
+
+.jarvis-hud .jh-core {
+  filter: drop-shadow(0 0 24px rgba(56, 232, 255, 0.35));
+}
+
+.jarvis-hud .jh-state {
+  font-family: "Segoe UI", system-ui, sans-serif;
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: 0.32em;
+  text-transform: uppercase;
+  color: #38e8ff;
+  text-shadow: 0 0 10px rgba(56, 232, 255, 0.7);
+}
+
+.jarvis-hud .jh-text {
+  max-width: min(760px, 100%);
+  min-height: 1.5em;
+  font-size: 18px;
+  line-height: 1.5;
+  text-align: center;
+  color: #d8f6ff;
+  text-shadow: 0 1px 6px rgba(0, 0, 0, 0.8);
+  overflow-wrap: anywhere;
+}
+
+.jarvis-hud .jh-hint {
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  color: rgba(160, 220, 235, 0.5);
+}
+
+@keyframes jh-blink {
+  50% {
+    opacity: 0.25;
+  }
+}
+
 @keyframes arc-spin {
   to {
     transform: rotate(360deg);
@@ -3119,6 +3225,28 @@ select:focus {
   gap: 8px;
 }
 
+.jarvis-shortcuts {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  font-size: 12.5px;
+}
+
+.jarvis-shortcuts kbd {
+  padding: 1px 6px;
+  border: 1px solid rgba(56, 232, 255, 0.35);
+  border-radius: 4px;
+  background: rgba(56, 232, 255, 0.08);
+  color: #bff7ff;
+  font-family: inherit;
+  font-size: 11px;
+}
+
+.jarvis-autoread {
+  margin: 4px 0 10px;
+  color: #a8d8e6;
+}
+
 /* Mini reacteur dans la fenetre JARVIS : ouvre l'apercu au clic. */
 .jarvis-core-teaser {
   display: flex;
@@ -3318,4 +3446,9 @@ body.jarvis .changelog-dialog {
   .ji-reactor circle {
     opacity: 1;
   }
+}
+.jarvis-heard {
+  margin: 8px 0 0;
+  font-size: 12px;
+  color: var(--muted, #8aa);
 }

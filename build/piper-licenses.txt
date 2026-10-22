@@ -21,5 +21,24 @@ Voix francaise "Tom" (fr_FR-tom-medium)
   Modele  : https://huggingface.co/rhasspy/piper-voices/tree/v1.0.0/fr/fr_FR/tom/medium
   Source  : https://git.bksp.space/Tjiho/French-tts-model-piper
 
+whisper.cpp (reconnaissance vocale, dictee)
+  Licence : MIT
+  Source  : https://github.com/ggml-org/whisper.cpp (build b5454)
+
+Modele Whisper "base" (ggml-base-q5_1)
+  Licence : MIT (OpenAI Whisper)
+  Source  : https://github.com/openai/whisper
+
 Les textes complets des licences GPL v3 et AGPL v3 sont disponibles sur
 https://www.gnu.org/licenses/ et celui de la licence MIT avec chaque projet.
+
+------------------------------------------------------------------------
+Mot d'activation « Hey Jarvis » : openWakeWord
+https://github.com/dscripka/openWakeWord
+Code : licence Apache 2.0. Modeles pre-entraines (melspectrogram.onnx,
+embedding_model.onnx, hey_jarvis_v0.1.onnx) : licence Creative Commons
+BY-NC-SA 4.0 (usage non commercial, partage dans les memes conditions).
+Le modele d'embedding est derive d'un modele Google (Apache 2.0).
+
+Execution des modeles : ONNX Runtime Web (onnxruntime-web)
+https://github.com/microsoft/onnxruntime - licence MIT

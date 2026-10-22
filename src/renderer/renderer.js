@@ -972,6 +972,9 @@ function applyAiState(session, aiState, exact, waitingFor) {
       session.attention = true;
       notifySession(session, `${label} a terminé et attend ta réponse.`);
     }
+    if (longEnough && isSessionVisible(session)) {
+      jarvisAutoReadReply(session);
+    }
   }
   session.aiState = aiState;
   session.waitingFor = aiState === "waiting" ? waitingFor : "";
@@ -2006,6 +2009,11 @@ async function openTerminalSession({ title, accent, starter, replayText, spec })
     if (event.type !== "keydown") {
       return true;
     }
+    // Raccourci de l'application (gere par le document) : rien n'est envoye a
+    // la CLI (ex. Ctrl+Maj+Espace produirait un caractere nul).
+    if (chordToActionId(eventToChord(event))) {
+      return false;
+    }
     if (event.ctrlKey && event.shiftKey && event.key === "C") {
       const selected = terminal.getSelection();
       if (selected) {
@@ -2961,6 +2969,9 @@ const SHORTCUT_ACTIONS = [
   { id: "openConversations", label: "Conversations Claude (reprendre une conversation)", category: "Navigation", run: () => openConversations() },
   { id: "openPrompts", label: "Bibliothèque de prompts", category: "Navigation", run: () => openPrompts() },
   { id: "openJarvis", label: "JARVIS", category: "Navigation", run: () => openJarvis() },
+  { id: "jarvisDictate", label: "JARVIS : parler à l'IA (écoute / annuler)", category: "JARVIS", run: () => toggleJarvisDictation() },
+  { id: "jarvisReadReply", label: "JARVIS : lire la dernière réponse de l'IA", category: "JARVIS", run: () => jarvisReadReply() },
+  { id: "jarvisAutoRead", label: "JARVIS : lecture automatique des réponses (activer / désactiver)", category: "JARVIS", run: () => toggleJarvisAutoRead() },
   { id: "openGitChanges", label: "Changements Git de l'onglet", category: "Navigation", run: () => openGitChanges() },
   { id: "renameTab", label: "Renommer l'onglet actif", category: "Onglets", run: () => focusRenameActive() },
   { id: "toggleSplit", label: "Vue partagée (deux onglets côte à côte)", category: "Vue partagée", run: () => toggleSplit() },
@@ -2999,7 +3010,9 @@ const DEFAULT_KEYBINDINGS = {
   zoomIn: "Ctrl+=",
   zoomOut: "Ctrl+-",
   zoomReset: "Ctrl+0",
-  findInTerminal: "Ctrl+Shift+F"
+  findInTerminal: "Ctrl+Shift+F",
+  jarvisDictate: "Ctrl+Shift+Space",
+  jarvisReadReply: "Ctrl+Shift+J"
 };
 
 // keybindings : actionId -> chord ("" = desactive). Charge depuis localStorage,
@@ -5177,6 +5190,783 @@ function buildJarvisVoiceChain(ctx, source, settings) {
 
   return output;
 }
+
+// --- Voix de JARVIS dans l'interface : lecture des reponses et dictee --------
+// Le reacteur de la barre d'outils (jarvis.core, en mode JARVIS) montre l'etat :
+// ecoute pendant la dictee, reflexion pendant le calcul, parole pendant la lecture.
+const jarvisVoice = { context: null, token: 0, audio: null, speaking: false };
+
+function jarvisAudioContext() {
+  jarvisVoice.context ??= new AudioContext();
+  return jarvisVoice.context;
+}
+
+// Meme etat pour le reacteur de la barre d'outils et le grand reacteur central.
+function setJarvisCoreState(stateName, analyser = null) {
+  for (const core of [jarvis.core, jarvisHud.core]) {
+    core?.setState(stateName);
+    core?.setAnalyser(analyser);
+  }
+}
+
+function isJarvisAutoRead() {
+  return window.localStorage.getItem("jarvisAutoRead") === "1";
+}
+
+function toggleJarvisAutoRead() {
+  const next = !isJarvisAutoRead();
+  window.localStorage.setItem("jarvisAutoRead", next ? "1" : "0");
+  flashStatus(next ? "JARVIS lira chaque réponse de l'IA" : "Lecture automatique des réponses désactivée");
+}
+
+// Markdown -> texte a dire : le code n'est pas lu, la mise en forme est retiree.
+function textForSpeech(markdown) {
+  return String(markdown || "")
+    .replace(/```[\s\S]*?```/g, "\n(bloc de code)\n")
+    .replace(/`([^`\n]+)`/g, "$1")
+    .replace(/!\[[^\]]*\]\([^)]*\)/g, "")
+    .replace(/\[([^\]]+)\]\([^)]*\)/g, "$1")
+    .replace(/https?:\/\/\S+/g, "lien")
+    .replace(/^\s*\|?[\s:|-]{3,}\|?\s*$/gm, "")
+    .replace(/\|/g, ", ")
+    .replace(/^\s{0,3}#{1,6}\s*/gm, "")
+    .replace(/^\s*[-*+•]\s+/gm, "")
+    .replace(/^\s*>\s?/gm, "")
+    .replace(/(\*\*|__|\*|_|~~)(\S[^\n]*?)\1/g, "$2")
+    .replace(/[ \t]+/g, " ")
+    .replace(/\n{2,}/g, "\n")
+    .trim();
+}
+
+// Decoupe en morceaux de quelques phrases : le premier est dit rapidement et
+// les suivants sont generes pendant la lecture.
+function splitForSpeech(text) {
+  const sentences = text.split(/(?<=[.!?…:])\s+|\n+/).map((part) => part.trim()).filter(Boolean);
+  const chunks = [];
+  let current = "";
+  for (const sentence of sentences) {
+    if (current && current.length + sentence.length > 260) {
+      chunks.push(current);
+      current = sentence;
+    } else {
+      current = current ? `${current} ${sentence}` : sentence;
+    }
+  }
+  if (current) {
+    chunks.push(current);
+  }
+  return chunks;
+}
+
+function stopJarvisSpeech() {
+  jarvisVoice.token += 1;
+  jarvisVoice.audio?.pause();
+  jarvisVoice.audio = null;
+  window.speechSynthesis?.cancel();
+  if (jarvisVoice.speaking) {
+    jarvisVoice.speaking = false;
+    setJarvisCoreState("idle");
+    if (jarvisListener.mode !== "command") {
+      hideJarvisHud();
+    }
+  }
+}
+
+function playJarvisChunk(bytes, settings) {
+  return new Promise((resolve) => {
+    const ctx = jarvisAudioContext();
+    const url = URL.createObjectURL(new Blob([bytes], { type: "audio/wav" }));
+    const audio = new Audio(url);
+    audio.preservesPitch = false;
+    audio.playbackRate = 1 - settings.pitch;
+    const analyser = ctx.createAnalyser();
+    analyser.fftSize = 256;
+    buildJarvisVoiceChain(ctx, ctx.createMediaElementSource(audio), settings).connect(analyser);
+    analyser.connect(ctx.destination);
+    jarvisVoice.audio = audio;
+    setJarvisCoreState("speaking", analyser);
+    const done = () => {
+      URL.revokeObjectURL(url);
+      resolve();
+    };
+    audio.addEventListener("ended", done);
+    audio.addEventListener("pause", done);
+    audio.play().catch(done);
+  });
+}
+
+function speakWithWindowsVoice(text) {
+  return new Promise((resolve) => {
+    const utterance = new SpeechSynthesisUtterance(text);
+    utterance.lang = "fr-FR";
+    utterance.onend = resolve;
+    utterance.onerror = resolve;
+    setJarvisCoreState("speaking");
+    window.speechSynthesis.speak(utterance);
+  });
+}
+
+// Dit un texte avec la voix de JARVIS (interrompt la lecture en cours).
+async function speakJarvis(text) {
+  stopJarvisSpeech();
+  const token = jarvisVoice.token;
+  const chunks = splitForSpeech(textForSpeech(text));
+  if (!chunks.length) {
+    return;
+  }
+  const settings = loadJarvisVoiceSettings();
+  const synth = (chunk) =>
+    window.launcher.voiceSpeak({ text: chunk, voiceId: settings.voice, lengthScale: (1 - settings.pitch) / settings.speed });
+  jarvisVoice.speaking = true;
+  showJarvisHud("JARVIS", chunks[0], true);
+  setJarvisCoreState("thinking");
+  let next = synth(chunks[0]).catch(() => null);
+  for (let i = 0; i < chunks.length; i += 1) {
+    const result = await next;
+    if (token !== jarvisVoice.token) {
+      return;
+    }
+    next = i + 1 < chunks.length ? synth(chunks[i + 1]).catch(() => null) : null;
+    showJarvisHud("JARVIS", chunks[i], true);
+    if (result?.audio) {
+      await playJarvisChunk(result.audio, settings);
+    } else {
+      await speakWithWindowsVoice(chunks[i]);
+    }
+    if (token !== jarvisVoice.token) {
+      return;
+    }
+  }
+  jarvisVoice.speaking = false;
+  setJarvisCoreState("idle");
+  hideJarvisHud(600);
+}
+
+async function jarvisReadReply(session = state.sessions.get(state.activeSessionId), auto = false) {
+  if (!jarvis.active) {
+    if (!auto) {
+      flashStatus("Active JARVIS (bouton réacteur) pour la lecture à voix haute");
+    }
+    return;
+  }
+  if (!session || session.type !== "terminal") {
+    return;
+  }
+  let reply = null;
+  for (let attempt = 0; attempt < (auto ? 8 : 3); attempt += 1) {
+    if (attempt) {
+      await new Promise((resolve) => window.setTimeout(resolve, 700));
+    }
+    reply = await window.launcher.getLastReply(session.id);
+    if (reply?.text && !(auto && reply.id && reply.id === session.lastSpokenReplyId)) {
+      break;
+    }
+  }
+  if (!reply?.text) {
+    jarvisLog(`lecture : aucune reponse (${reply?.error || "?"} ; ${auto ? "auto" : "manuel"}, onglet « ${session.title} », profil ${sessionProfileId(session)})`);
+    if (!auto) {
+      flashStatus("Aucune réponse à lire (lecture disponible pour Claude et Codex)");
+    }
+    return;
+  }
+  jarvisLog(`lecture : ${reply.text.length} caracteres (${auto ? "auto" : "manuel"})`);
+  if (auto && reply.id && reply.id === session.lastSpokenReplyId) {
+    return;
+  }
+  session.lastSpokenReplyId = reply.id;
+  speakJarvis(reply.text);
+}
+
+// Fin d'un tour de l'IA dans l'onglet affiche : lecture si l'option est active.
+function jarvisAutoReadReply(session) {
+  if (!jarvis.active || !isJarvisAutoRead()) {
+    return;
+  }
+  if (jarvisListener.mode === "command") {
+    jarvisLog("lecture auto ignoree : ecoute d'une demande en cours");
+    return;
+  }
+  jarvisReadReply(session, true);
+}
+
+// --- Ecoute vocale : mot d'activation, commande, envoi automatique ----------
+// Le micro est capte en continu en mode JARVIS (si l'option est active) et
+// analyse localement, rien n'est envoye en ligne :
+//  - le detecteur openWakeWord (« Hey Jarvis ») analyse chaque bloc de 80 ms ;
+//  - en secours, un detecteur de voix decoupe les phrases et Whisper cherche
+//    « Jarvis » dans leur transcription (prononciations a la francaise).
+//  - veille   : on attend « JARVIS » (seul, ou suivi directement de la demande) ;
+//  - commande : le grand reacteur s'affiche, la demande est transcrite des que
+//               l'utilisateur se tait, puis envoyee a l'IA de l'onglet.
+// Whisper ecrit le mot de bien des facons : Jarvis, J'arvis, Djarvis, Jervis...
+const WAKE_WORD = /(?<![\p{L}])(d?[jg]|dz)['’\s-]?[ae]r?[\s-]?v[iy]\p{L}{0,3}(?![\p{L}])/iu;
+const LEADING_WAKE_WORDS = new RegExp(String.raw`^(?:[\s,.!?:;-]*(?:(?:hey|h[eéè]|eh|et|ok|okay|dis|dit|dix)[\s,]+)?(?:${WAKE_WORD.source}))+[\s,.!?:;-]*`, "iu");
+const TRAILING_WAKE_WORD = new RegExp(String.raw`[\s,.!?:;-]+(?:${WAKE_WORD.source})[\s,.!?:;-]*$`, "iu");
+
+// « Jarvis, Jarvis, explique ce fichier » -> « explique ce fichier ».
+function stripWakeWords(text) {
+  return text.replace(LEADING_WAKE_WORDS, "").replace(TRAILING_WAKE_WORD, "").trim();
+}
+
+// Phrases que Whisper invente sur du silence ou du souffle (« J'avis. » vient
+// de l'indice « JARVIS ») : jamais envoyees a l'IA.
+const WHISPER_HALLUCINATION = /^[\s.!?…-]*(?:j['’\s]?avis|sous-titr\p{L}*\b.*|merci d'avoir regard\p{L}*.*|abonnez-vous.*|au revoir)?[\s.!?…-]*$/iu;
+
+function isWhisperHallucination(text) {
+  return WHISPER_HALLUCINATION.test(text);
+}
+const VAD = {
+  minThreshold: 0.012,
+  startMs: 80,
+  minSpeechMs: 250, // en dessous, bruit bref (clic, souffle) : pas de transcription
+  wakeSilenceMs: 700,
+  commandSilenceMs: 1100,
+  commandTimeoutMs: 7000,
+  maxSegmentMs: 30000,
+  preRollMs: 450,
+  wakeScore: 0.3,
+  wakeCooldownMs: 1500
+};
+
+// Journal de diagnostic (userData/jarvis-ecoute.log).
+function jarvisLog(message) {
+  try {
+    window.launcher.voiceLog(message);
+  } catch {}
+}
+
+function isJarvisWakeWordEnabled() {
+  return window.localStorage.getItem("jarvisWakeWord") !== "0";
+}
+
+document.addEventListener(
+  "keydown",
+  (event) => {
+    if (event.key === "Escape" && (jarvisHud.element || jarvisListener.mode === "command")) {
+      event.preventDefault();
+      event.stopPropagation();
+      cancelJarvisInteraction();
+    }
+  },
+  true
+);
+
+// Petit signal sonore (debut d'ecoute / envoi).
+function jarvisChime(up = true) {
+  const ctx = jarvisAudioContext();
+  const osc = ctx.createOscillator();
+  const gain = ctx.createGain();
+  osc.type = "sine";
+  osc.frequency.setValueAtTime(up ? 660 : 880, ctx.currentTime);
+  osc.frequency.linearRampToValueAtTime(up ? 990 : 550, ctx.currentTime + 0.14);
+  gain.gain.setValueAtTime(0.0001, ctx.currentTime);
+  gain.gain.exponentialRampToValueAtTime(0.12, ctx.currentTime + 0.02);
+  gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.22);
+  osc.connect(gain).connect(ctx.destination);
+  osc.start();
+  osc.stop(ctx.currentTime + 0.25);
+}
+
+// --- Grand reacteur au centre (HUD) ---
+const jarvisHud = { element: null, core: null, hideTimer: null };
+
+// passive : pendant la lecture, l'interface reste utilisable (seul le
+// reacteur capte le clic).
+function showJarvisHud(stateText, text = "", passive = false) {
+  window.clearTimeout(jarvisHud.hideTimer);
+  if (!jarvisHud.element) {
+    const hud = document.createElement("div");
+    hud.className = "jarvis-hud";
+    hud.innerHTML = `
+      <div class="jh-core"></div>
+      <div class="jh-state"></div>
+      <div class="jh-text"></div>
+      <div class="jh-hint">Échap ou clic pour annuler</div>`;
+    hud.addEventListener("click", (event) => {
+      if (!hud.classList.contains("passive") || event.target.closest(".jh-core")) {
+        cancelJarvisInteraction();
+      }
+    });
+    document.body.appendChild(hud);
+    const size = Math.round(Math.min(380, window.innerHeight * 0.45));
+    jarvisHud.core = new window.JarvisCore(hud.querySelector(".jh-core"), { size });
+    jarvisHud.element = hud;
+    requestAnimationFrame(() => hud.classList.add("visible"));
+  }
+  jarvisHud.element.classList.toggle("passive", passive);
+  jarvisHud.element.querySelector(".jh-state").textContent = stateText;
+  jarvisHud.element.querySelector(".jh-text").textContent = text;
+}
+
+function hideJarvisHud(delay = 0) {
+  window.clearTimeout(jarvisHud.hideTimer);
+  jarvisHud.hideTimer = window.setTimeout(() => {
+    const { element, core } = jarvisHud;
+    if (!element) {
+      return;
+    }
+    jarvisHud.element = null;
+    jarvisHud.core = null;
+    element.classList.remove("visible");
+    window.setTimeout(() => {
+      core.destroy();
+      element.remove();
+    }, 300);
+  }, delay);
+}
+
+// --- Capture du micro et detection de la voix ---
+const jarvisListener = {
+  stream: null,
+  source: null,
+  processor: null,
+  analyser: null,
+  mode: "off", // off | wake | command
+  busy: false,
+  noise: 0.01,
+  segment: null,
+  preRoll: [],
+  loudMs: 0,
+  quietMs: 0,
+  commandStartedAt: 0,
+  target: null,
+  queue: [], // phrases terminees en attente de transcription
+  starting: null,
+  ctx: null, // contexte audio 16 kHz dedie au micro
+  detector: null, // openWakeWord, charge une fois
+  detectorLoading: null,
+  detectorChain: Promise.resolve(),
+  detectorPending: 0,
+  wakeCooldownUntil: 0,
+  stats: { since: 0, maxRms: 0, maxScore: 0, blocks: 0 },
+  heard: [] // dernieres phrases entendues en veille (diagnostic dans les reglages)
+};
+
+function startJarvisListener() {
+  if (jarvisListener.stream) {
+    return Promise.resolve(true);
+  }
+  jarvisListener.starting ??= openJarvisMicrophone().finally(() => {
+    jarvisListener.starting = null;
+  });
+  return jarvisListener.starting;
+}
+
+async function openJarvisMicrophone() {
+  try {
+    jarvisListener.stream = await navigator.mediaDevices.getUserMedia({
+      audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }
+    });
+  } catch {
+    flashStatus("Micro indisponible : vérifie l'accès au micro dans les paramètres de Windows");
+    return false;
+  }
+  // Contexte a 16 kHz : le navigateur reechantillonne le micro au format
+  // attendu par openWakeWord et Whisper.
+  jarvisListener.ctx ??= new AudioContext({ sampleRate: 16000 });
+  const ctx = jarvisListener.ctx;
+  ctx.resume();
+  jarvisListener.source = ctx.createMediaStreamSource(jarvisListener.stream);
+  jarvisListener.analyser = ctx.createAnalyser();
+  jarvisListener.analyser.fftSize = 256;
+  jarvisListener.processor = ctx.createScriptProcessor(1024, 1, 1);
+  jarvisListener.processor.onaudioprocess = (event) => onJarvisAudio(event.inputBuffer.getChannelData(0), ctx.sampleRate);
+  jarvisListener.source.connect(jarvisListener.analyser);
+  jarvisListener.source.connect(jarvisListener.processor);
+  // Sortie muette : le processeur doit etre relie a la destination pour tourner.
+  const mute = ctx.createGain();
+  mute.gain.value = 0;
+  jarvisListener.processor.connect(mute).connect(ctx.destination);
+  jarvisListener.mode = "wake";
+  jarvisListener.stats = { since: Date.now(), maxRms: 0, maxScore: 0, blocks: 0 };
+  document.body.classList.add("jarvis-wake");
+  const track = jarvisListener.stream.getAudioTracks()[0];
+  jarvisLog(`micro ouvert : ${track?.label || "?"} ; contexte ${ctx.sampleRate} Hz (${ctx.state})`);
+  loadWakeDetector();
+  return true;
+}
+
+async function loadWakeDetector() {
+  if (jarvisListener.detector || jarvisListener.detectorLoading) {
+    return jarvisListener.detectorLoading;
+  }
+  jarvisListener.detectorLoading = (async () => {
+    try {
+      const assets = await window.launcher.voiceWakeword();
+      if (!assets) {
+        jarvisLog("openWakeWord absent : detection par Whisper seulement");
+        return;
+      }
+      if (!window.ort) {
+        await new Promise((resolve, reject) => {
+          const script = document.createElement("script");
+          script.src = `${assets.ortUrl}ort.wasm.min.js`;
+          script.onload = resolve;
+          script.onerror = () => reject(new Error("onnxruntime-web introuvable"));
+          document.head.appendChild(script);
+        });
+      }
+      window.ort.env.wasm.wasmPaths = assets.ortUrl;
+      window.ort.env.wasm.numThreads = 1;
+      jarvisListener.detector = await window.WakeWordDetector.create(window.ort, assets.models);
+      jarvisLog("openWakeWord pret");
+    } catch (error) {
+      jarvisLog(`openWakeWord indisponible : ${error?.message || error}`);
+    } finally {
+      jarvisListener.detectorLoading = null;
+    }
+  })();
+  return jarvisListener.detectorLoading;
+}
+
+// Bloc de micro -> score « Hey Jarvis » (traitement en file, sans retard cumule).
+function runWakeDetector(samples) {
+  const listener = jarvisListener;
+  if (!listener.detector || listener.mode !== "wake" || Date.now() < listener.wakeCooldownUntil) {
+    return;
+  }
+  if (listener.detectorPending > 6) {
+    return;
+  }
+  listener.detectorPending += 1;
+  listener.detectorChain = listener.detectorChain
+    .then(() => listener.detector.process(samples))
+    .then(({ hey: score }) => {
+      listener.stats.maxScore = Math.max(listener.stats.maxScore, score);
+      if (score >= VAD.wakeScore && listener.mode === "wake" && Date.now() >= listener.wakeCooldownUntil) {
+        jarvisLog(`mot d'activation detecte (openWakeWord, score ${score.toFixed(2)})`);
+        listener.wakeCooldownUntil = Date.now() + VAD.wakeCooldownMs;
+        listener.detector.reset();
+        // Les phrases precedentes ne sont pas la demande.
+        listener.queue = [];
+        beginJarvisCommand(jarvisCommandTarget());
+      }
+    })
+    .catch((error) => jarvisLog(`erreur openWakeWord : ${error?.message || error}`))
+    .finally(() => {
+      listener.detectorPending -= 1;
+    });
+}
+
+// Statistiques toutes les 10 s dans le journal (niveau du micro, meilleur score).
+function logListenerStats(rms, threshold) {
+  const stats = jarvisListener.stats;
+  stats.maxRms = Math.max(stats.maxRms, rms);
+  stats.blocks += 1;
+  if (Date.now() - stats.since >= 10000) {
+    jarvisLog(
+      `niveau max ${stats.maxRms.toFixed(3)} ; seuil ${threshold.toFixed(3)} ; bruit ${jarvisListener.noise.toFixed(4)} ; meilleur score openWakeWord ${stats.maxScore.toFixed(2)} ; mode ${jarvisListener.mode}${jarvisVoice.speaking ? " (parle)" : ""}`
+    );
+    jarvisListener.stats = { since: Date.now(), maxRms: 0, maxScore: 0, blocks: 0 };
+  }
+}
+
+function stopJarvisListener() {
+  jarvisListener.mode = "off";
+  jarvisListener.segment = null;
+  jarvisListener.queue = [];
+  document.body.classList.remove("jarvis-wake", "jarvis-dictating");
+  jarvisListener.processor?.disconnect();
+  jarvisListener.source?.disconnect();
+  jarvisListener.stream?.getTracks().forEach((track) => track.stop());
+  Object.assign(jarvisListener, { stream: null, source: null, processor: null, analyser: null, busy: false });
+  jarvisLog("micro ferme");
+}
+
+// Ecoute du mot d'activation selon l'option (appele a chaque changement).
+function syncJarvisListener() {
+  if (jarvis.active && isJarvisWakeWordEnabled()) {
+    startJarvisListener();
+  } else if (jarvisListener.mode === "wake") {
+    stopJarvisListener();
+  }
+}
+
+// La capture continue pendant la transcription : les phrases terminees
+// attendent leur tour (sinon « Jarvis » dit pendant un calcul etait perdu).
+function onJarvisAudio(samples, sampleRate) {
+  const listener = jarvisListener;
+  if (listener.mode === "off" || jarvisVoice.speaking) {
+    listener.segment = null;
+    return;
+  }
+  const blockMs = (samples.length / sampleRate) * 1000;
+  let sum = 0;
+  for (let i = 0; i < samples.length; i += 1) {
+    sum += samples[i] * samples[i];
+  }
+  const rms = Math.sqrt(sum / samples.length);
+  const threshold = Math.max(VAD.minThreshold, listener.noise * 3);
+  const copy = new Float32Array(samples);
+  logListenerStats(rms, threshold);
+  runWakeDetector(copy);
+
+  if (!listener.segment) {
+    // Bruit de fond suivi lentement, hors parole uniquement.
+    if (rms < threshold) {
+      listener.noise = listener.noise * 0.95 + rms * 0.05;
+    }
+    listener.preRoll.push(copy);
+    while (listener.preRoll.length * blockMs > VAD.preRollMs) {
+      listener.preRoll.shift();
+    }
+    listener.loudMs = rms > threshold ? listener.loudMs + blockMs : 0;
+    if (listener.loudMs >= VAD.startMs) {
+      jarvisLog(`voix detectee (niveau ${rms.toFixed(3)}, seuil ${threshold.toFixed(3)}, mode ${listener.mode})`);
+      listener.segment = { blocks: [...listener.preRoll], sampleRate, ms: 0, loudMs: listener.loudMs };
+      listener.preRoll = [];
+      listener.quietMs = 0;
+    } else if (
+      listener.mode === "command" &&
+      !listener.busy &&
+      !listener.queue.length &&
+      Date.now() - listener.commandStartedAt > VAD.commandTimeoutMs
+    ) {
+      // Rien dit apres « JARVIS » : retour en veille.
+      endJarvisCommand("Je n'ai rien entendu.");
+    }
+    return;
+  }
+
+  listener.segment.blocks.push(copy);
+  listener.segment.ms += blockMs;
+  if (rms > threshold) {
+    listener.segment.loudMs += blockMs;
+  }
+  listener.quietMs = rms > threshold ? 0 : listener.quietMs + blockMs;
+  const silence = listener.mode === "command" ? VAD.commandSilenceMs : VAD.wakeSilenceMs;
+  if (listener.quietMs >= silence || listener.segment.ms >= VAD.maxSegmentMs) {
+    listener.queue.push(listener.segment);
+    listener.segment = null;
+    processJarvisQueue();
+  }
+}
+
+async function segmentToWav16k(segment) {
+  const length = segment.blocks.reduce((total, block) => total + block.length, 0);
+  const merged = new Float32Array(length);
+  let offset = 0;
+  for (const block of segment.blocks) {
+    merged.set(block, offset);
+    offset += block.length;
+  }
+  const buffer = new AudioBuffer({ length, numberOfChannels: 1, sampleRate: segment.sampleRate });
+  buffer.copyToChannel(merged, 0);
+  const offline = new OfflineAudioContext(1, Math.ceil((length / segment.sampleRate) * 16000), 16000);
+  const source = offline.createBufferSource();
+  source.buffer = buffer;
+  source.connect(offline.destination);
+  source.start();
+  return encodeWav16k((await offline.startRendering()).getChannelData(0));
+}
+
+async function processJarvisQueue() {
+  const listener = jarvisListener;
+  if (listener.busy) {
+    return;
+  }
+  while (listener.queue.length && listener.mode !== "off") {
+    listener.busy = true;
+    await handleJarvisSegment(listener.queue.shift());
+    listener.busy = false;
+  }
+}
+
+// Le mode au moment de la transcription decide : apres « JARVIS », la phrase
+// suivante (meme dite pendant le calcul) est la demande.
+async function handleJarvisSegment(segment) {
+  const listener = jarvisListener;
+  const mode = listener.mode;
+  if (mode === "command") {
+    setJarvisCoreState("thinking");
+    showJarvisHud("Transcription…");
+  }
+  let text = "";
+  const started = Date.now();
+  if (segment.loudMs < VAD.minSpeechMs) {
+    jarvisLog(`segment ignore : ${Math.round(segment.loudMs)} ms de voix seulement`);
+  } else {
+    try {
+      // L'indice « JARVIS » ne sert qu'a la veille : apres l'activation, il
+      // pousse Whisper a ecrire « J'avis. » sur du silence.
+      const result = await window.launcher.voiceTranscribe(await segmentToWav16k(segment), mode === "wake" ? "JARVIS" : "");
+      text = result?.text || "";
+      if (result?.error) {
+        jarvisLog(`erreur Whisper : ${result.error}`);
+      }
+    } catch (error) {
+      jarvisLog(`erreur Whisper : ${error?.message || error}`);
+    }
+    jarvisLog(`Whisper (${mode}, ${Math.round(segment.ms)} ms d'audio, ${Date.now() - started} ms) : « ${text} »`);
+  }
+  if (listener.mode !== mode) {
+    return;
+  }
+
+  if (mode === "wake") {
+    if (text) {
+      listener.heard = [text, ...listener.heard].slice(0, 5);
+    }
+    const match = WAKE_WORD.exec(text);
+    if (!match) {
+      return;
+    }
+    // « JARVIS, explique ce fichier » : la demande suit directement.
+    const rest = stripWakeWords(text.slice(match.index));
+    if (rest.split(/\s+/).length >= 2) {
+      submitJarvisCommand(rest, jarvisCommandTarget());
+    } else {
+      beginJarvisCommand(jarvisCommandTarget());
+    }
+    return;
+  }
+  text = stripWakeWords(text);
+  if (isWhisperHallucination(text)) {
+    if (text) {
+      jarvisLog(`phrase inventee par Whisper ignoree : « ${text} »`);
+    }
+    text = "";
+  }
+  if (text) {
+    submitJarvisCommand(text, listener.target);
+  } else {
+    // Juste « Jarvis » (ou rien de clair) : on attend la suite ; sans parole
+    // pendant quelques secondes, retour en veille.
+    listener.commandStartedAt = Date.now();
+    setJarvisCoreState("listening", listener.analyser);
+    showJarvisHud("À l'écoute…", "Je t'écoute");
+  }
+}
+
+// Cible d'une commande vocale : terminal de l'onglet affiche.
+function jarvisCommandTarget() {
+  const session = state.sessions.get(state.activeSessionId);
+  return session?.type === "terminal" ? { session } : null;
+}
+
+function beginJarvisCommand(target) {
+  stopJarvisSpeech();
+  jarvisListener.mode = "command";
+  jarvisListener.target = target;
+  document.body.classList.add("jarvis-dictating");
+  jarvisListener.commandStartedAt = Date.now();
+  jarvisChime(true);
+  const where = target?.element ? "dans le champ" : target?.session ? `pour « ${target.session.title} »` : "";
+  showJarvisHud("À l'écoute…", where ? `Parle, j'écris ${where}` : "Parle, je t'écoute");
+  setJarvisCoreState("listening", jarvisListener.analyser);
+  jarvisHud.core?.setState("listening");
+  jarvisHud.core?.setAnalyser(jarvisListener.analyser);
+}
+
+function endJarvisCommand(message = "", delay = 1400) {
+  jarvisListener.mode = isJarvisWakeWordEnabled() && jarvis.active ? "wake" : "off";
+  jarvisListener.target = null;
+  document.body.classList.remove("jarvis-dictating");
+  if (jarvisListener.mode === "off") {
+    stopJarvisListener();
+  }
+  setJarvisCoreState("idle");
+  if (message) {
+    showJarvisHud(message);
+  }
+  hideJarvisHud(message ? delay : 0);
+}
+
+function submitJarvisCommand(text, target) {
+  jarvisLog(`demande : « ${text} »`);
+  if (!target) {
+    endJarvisCommand("Ouvre un onglet d'IA pour me parler.", 2200);
+    return;
+  }
+  jarvisChime(false);
+  if (target.element) {
+    insertDictation(target, text);
+    endJarvisCommand();
+    showJarvisHud("Écrit", text);
+    hideJarvisHud(1600);
+    return;
+  }
+  const session = target.session;
+  if (!state.sessions.has(session.id)) {
+    endJarvisCommand("L'onglet a été fermé.", 2000);
+    return;
+  }
+  pasteToSession(session, text, true);
+  setActiveSession(session.id);
+  endJarvisCommand();
+  showJarvisHud(`Envoyé à ${getProfileLabel(sessionProfileId(session)) || "l'IA"}`, text);
+  hideJarvisHud(2000);
+}
+
+// Echap / clic sur le grand reacteur : annule l'ecoute ou la lecture.
+function cancelJarvisInteraction() {
+  jarvisListener.queue = [];
+  if (jarvisListener.mode === "command") {
+    endJarvisCommand();
+  }
+  stopJarvisSpeech();
+  hideJarvisHud();
+}
+
+// Ou inserer un texte dicte au raccourci : champ de saisie actif, sinon terminal.
+function dictationTarget() {
+  const element = document.activeElement;
+  if (element?.classList?.contains("xterm-helper-textarea")) {
+    const session = [...state.sessions.values()].find((item) => item.container?.contains(element));
+    return { session: session || state.sessions.get(state.activeSessionId) };
+  }
+  if (isEditableTarget(element) && !element.disabled && !element.readOnly) {
+    return { element };
+  }
+  return jarvisCommandTarget();
+}
+
+function insertDictation(target, text) {
+  if (target.element?.isConnected) {
+    target.element.focus();
+    document.execCommand("insertText", false, text);
+  } else if (target.session && state.sessions.has(target.session.id)) {
+    pasteToSession(target.session, text, false);
+  }
+}
+
+function encodeWav16k(samples) {
+  const buffer = new ArrayBuffer(44 + samples.length * 2);
+  const view = new DataView(buffer);
+  const writeText = (offset, text) => [...text].forEach((char, i) => view.setUint8(offset + i, char.charCodeAt(0)));
+  writeText(0, "RIFF");
+  view.setUint32(4, 36 + samples.length * 2, true);
+  writeText(8, "WAVE");
+  writeText(12, "fmt ");
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, 1, true);
+  view.setUint32(24, 16000, true);
+  view.setUint32(28, 32000, true);
+  view.setUint16(32, 2, true);
+  view.setUint16(34, 16, true);
+  writeText(36, "data");
+  view.setUint32(40, samples.length * 2, true);
+  samples.forEach((value, i) => view.setInt16(44 + i * 2, Math.max(-1, Math.min(1, value)) * 0x7fff, true));
+  return new Uint8Array(buffer);
+}
+
+// Ctrl+Maj+Espace : parler sans dire « JARVIS » (dans le champ actif ou a
+// l'IA de l'onglet) ; relancer le raccourci annule.
+async function toggleJarvisDictation() {
+  if (!jarvis.active) {
+    flashStatus("Active JARVIS (bouton réacteur) pour la commande vocale");
+    return;
+  }
+  if (jarvisListener.mode === "command") {
+    cancelJarvisInteraction();
+    return;
+  }
+  if (await startJarvisListener()) {
+    beginJarvisCommand(dictationTarget());
+  }
+}
+
 let classicBrandTitle = null;
 
 function playJarvisSound(src, volume = 1) {
@@ -5213,7 +6003,20 @@ function applyJarvisMode(active) {
       session.terminal.options.theme = currentTerminalTheme();
     }
   }
+  // En mode JARVIS, le reacteur de la barre d'outils devient l'icone vivante.
+  const svg = elements.jarvisButton.querySelector(".arc-reactor");
+  if (active && !jarvis.core) {
+    jarvis.core = new window.JarvisCore(elements.jarvisButton, { size: 32 });
+    svg.classList.add("hidden");
+  } else if (!active && jarvis.core) {
+    cancelJarvisInteraction();
+    stopJarvisListener();
+    jarvis.core.destroy();
+    jarvis.core = null;
+    svg.classList.remove("hidden");
+  }
   updateJarvisButton();
+  syncJarvisListener();
 }
 
 function updateJarvisButton() {
@@ -5391,7 +6194,48 @@ function openJarvisControls() {
     sub: jarvis.active ? "En ligne" : "Installé, en veille",
     dialogClass: "jarvis-dialog"
   });
-  modal.body.innerHTML = "<p>Les fonctionnalités avancées arriveront dans les prochaines versions.</p>";
+  modal.body.innerHTML = `
+    <p class="jarvis-shortcuts">
+      <span>Dis <kbd>Hey Jarvis</kbd> (ou simplement « Jarvis ») puis ta demande : elle part à l'IA dès que tu te tais</span>
+      <span class="jarvis-shortcut-row"><span class="jarvis-shortcut-chord"></span> parler sans le mot d'activation (dans le terminal ou n'importe quel champ) <button type="button" class="link-button jarvis-shortcut-edit">Modifier</button></span>
+      <span><kbd>Ctrl</kbd>+<kbd>Maj</kbd>+<kbd>J</kbd> lire la dernière réponse de l'IA</span>
+      <span><kbd>Échap</kbd> ou clic sur le réacteur : annuler l'écoute ou arrêter la lecture</span>
+    </p>
+    <label class="switch-row jarvis-wakeword">
+      <input type="checkbox" />
+      <span>Écouter le mot d'activation « JARVIS » (micro analysé sur ce PC uniquement)</span>
+    </label>
+    <label class="switch-row jarvis-autoread">
+      <input type="checkbox" />
+      <span>Lire automatiquement chaque réponse de l'IA (onglet affiché)</span>
+    </label>`;
+  if (jarvisListener.heard.length) {
+    const heard = document.createElement("p");
+    heard.className = "jarvis-heard";
+    heard.textContent = `Dernières phrases entendues : ${jarvisListener.heard.map((text) => `« ${text} »`).join(", ")}`;
+    modal.body.appendChild(heard);
+  }
+  const chord = modal.body.querySelector(".jarvis-shortcut-chord");
+  if (keybindings.jarvisDictate) {
+    renderChord(keybindings.jarvisDictate, chord);
+  } else {
+    chord.textContent = "Aucun raccourci :";
+  }
+  modal.body.querySelector(".jarvis-shortcut-edit").addEventListener("click", () => {
+    modal.close();
+    openShortcutsModal();
+  });
+  const wakeWord = modal.body.querySelector(".jarvis-wakeword input");
+  wakeWord.checked = isJarvisWakeWordEnabled();
+  wakeWord.addEventListener("change", () => {
+    window.localStorage.setItem("jarvisWakeWord", wakeWord.checked ? "1" : "0");
+    syncJarvisListener();
+  });
+  const autoRead = modal.body.querySelector(".jarvis-autoread input");
+  autoRead.checked = isJarvisAutoRead();
+  autoRead.addEventListener("change", () => {
+    window.localStorage.setItem("jarvisAutoRead", autoRead.checked ? "1" : "0");
+  });
 
   // Mini reacteur anime : acces direct a l'apercu de l'icone a l'ecoute.
   const teaser = document.createElement("button");
@@ -5702,6 +6546,11 @@ function openJarvis() {
   if (jarvis.playing) {
     return;
   }
+  // Clic sur le reacteur pendant l'ecoute ou la lecture : on annule.
+  if (jarvisListener.mode === "command" || jarvisVoice.speaking) {
+    cancelJarvisInteraction();
+    return;
+  }
   if (!jarvis.installed) {
     openJarvisInstall();
   } else if (!jarvis.active) {
@@ -5735,6 +6584,13 @@ async function initJarvis() {
 // Notes de version affichees apres une mise a jour. La cle est le numero de
 // version, la valeur la liste des nouveautes a montrer.
 const CHANGELOG = {
+  "0.1.27": [
+    "Le module à réacteur vous écoute : dites « OK Jarvis » (ou « Dis Jarvis », « Hey Jarvis ») puis votre demande, elle part à l'IA dès que vous vous taisez. Tout est analysé sur ce PC.",
+    "Grand réacteur au centre de l'écran pendant l'écoute et la lecture, avec sous-titres ; Échap ou clic pour annuler.",
+    "Lecture à voix haute des réponses de l'IA (Claude et Codex), automatique ou à la demande (Ctrl+Maj+J).",
+    "Parler sans mot d'activation : Ctrl+Maj+Espace, raccourci modifiable.",
+    "Correctif : une IA lancée dans un onglet fonctionne normalement même si le lanceur a été démarré depuis un terminal Claude Code."
+  ],
   "0.1.26": [
     "Le module à réacteur a trouvé sa voix : synthèse vocale intégrée, 100 % locale (hors ligne, rien à installer), avec réglages de débit, de grave et d'effets.",
     "Correctif : sélectionner du texte dans une fenêtre en relâchant la souris à l'extérieur ne la ferme plus."

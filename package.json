@@ -1,6 +1,6 @@
 {
   "name": "ia-cli-launcher",
-  "version": "0.1.26",
+  "version": "0.1.27",
   "description": "Lanceur Windows admin avec onglets terminal pour CLI IA.",
   "author": "Dev OpA",
   "homepage": "https://devopa.fr",
@@ -36,7 +36,8 @@
   },
   "devDependencies": {
     "electron": "^33.2.1",
-    "electron-builder": "^25.1.8"
+    "electron-builder": "^25.1.8",
+    "onnxruntime-web": "1.20.1"
   },
   "build": {
     "appId": "fr.devopa.ia-cli-launcher",
@@ -76,6 +77,18 @@
       {
         "from": "build/piper-licenses.txt",
         "to": "piper/LICENCES.txt"
+      },
+      {
+        "from": "vendor/whisper/${os}",
+        "to": "whisper/engine"
+      },
+      {
+        "from": "vendor/whisper/models",
+        "to": "whisper/models"
+      },
+      {
+        "from": "vendor/wakeword",
+        "to": "wakeword"
       }
     ],
     "win": {

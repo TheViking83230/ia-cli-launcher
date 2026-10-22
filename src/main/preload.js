@@ -47,6 +47,10 @@ contextBridge.exposeInMainWorld("launcher", {
   setJarvis: (patch) => ipcRenderer.invoke("jarvis:set", patch),
   voiceStatus: () => ipcRenderer.invoke("voice:status"),
   voiceSpeak: (request) => ipcRenderer.invoke("voice:speak", request),
+  voiceTranscribe: (wavBytes, prompt) => ipcRenderer.invoke("voice:transcribe", { wavBytes, prompt }),
+  voiceWakeword: () => ipcRenderer.invoke("voice:wakeword"),
+  voiceLog: (line) => ipcRenderer.send("voice:log", line),
+  getLastReply: (id) => ipcRenderer.invoke("terminal:last-reply", id),
   onJarvisMenu: (handler) => {
     const listener = () => handler();
     ipcRenderer.on("jarvis:menu", listener);

@@ -9,9 +9,11 @@ cd /src
 # sans les dependances Windows ni les artefacts.
 tar -cf - package.json package-lock.json src build scripts | tar -xf - -C /build
 # Voix de JARVIS deja recuperees cote Windows : reutilisees telles quelles.
-if [ -d vendor/piper/voices ]; then
-  tar -cf - vendor/piper/voices | tar -xf - -C /build
-fi
+for dir in vendor/piper/voices vendor/whisper/models vendor/wakeword/models; do
+  if [ -d "$dir" ]; then
+    tar -cf - "$dir" | tar -xf - -C /build
+  fi
+done
 cd /build
 
 # Scripts shell venant de Windows : fins de ligne LF.
