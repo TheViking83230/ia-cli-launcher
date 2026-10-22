@@ -78,6 +78,7 @@ async function fetchWhisper() {
   const engineDir = path.join(VENDOR, "whisper", OS_DIR[target]);
   await ensureArchive(WHISPER.urls[target], engineDir, path.join(engineDir, WHISPER.exe[target]));
   await download(WHISPER.modelUrl, path.join(VENDOR, "whisper", "models", WHISPER.model));
+  await download(WHISPER.commandModelUrl, path.join(VENDOR, "whisper", "models", WHISPER.commandModel));
 }
 
 async function fetchWakeword() {

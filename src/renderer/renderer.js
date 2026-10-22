@@ -5543,6 +5543,12 @@ function stripWakeWords(text) {
 const WHISPER_HALLUCINATION = /^[\s.!?…-]*(?:j['’\s]?avis|sous-titr\p{L}*\b.*|merci d'avoir regard\p{L}*.*|abonnez-vous.*|au revoir)?[\s.!?…-]*$/iu;
 
 function isWhisperHallucination(text) {
+  // Sur un bruit, Whisper recopie parfois le vocabulaire qu'on lui a donne.
+  const words = text.toLowerCase().match(/[\p{L}]{3,}/gu) || [];
+  const prompt = JARVIS_DICTATION_PROMPT.toLowerCase();
+  if (words.length >= 5 && words.filter((word) => prompt.includes(word)).length / words.length > 0.8) {
+    return true;
+  }
   return WHISPER_HALLUCINATION.test(text);
 }
 const VAD = {
@@ -5555,14 +5561,90 @@ const VAD = {
   maxSegmentMs: 30000,
   preRollMs: 450,
   wakeScore: 0.3,
+  // openWakeWord seul ne suffit qu'au-dessus de ce score, et seulement si une
+  // voix vient d'etre entendue ; en dessous, Whisper doit confirmer « Jarvis »
+  // (evite les declenchements sur un silence ou un « d'accord »).
+  wakeStrongScore: 0.6,
+  wakeVoiceWindowMs: 1500,
   wakeCooldownMs: 1500
 };
+
+// Vocabulaire donne a Whisper pour le texte des demandes : ces mots sont
+// ensuite ecrits correctement (ex. « features » et non « fiatures »).
+const JARVIS_DICTATION_PROMPT =
+  "Demande à une IA de programmation (Claude, Codex) : features, commit, push, pull request, build, release, bug, fix, refactor, npm, GitHub, API, frontend, backend.";
 
 // Journal de diagnostic (userData/jarvis-ecoute.log).
 function jarvisLog(message) {
   try {
     window.launcher.voiceLog(message);
   } catch {}
+}
+
+// Lexique personnel (noms propres), une entree par ligne.
+function jarvisLexicon() {
+  return (window.localStorage.getItem("jarvisLexicon") || "")
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .slice(0, 40);
+}
+
+// Noms propres de la conversation en cours (derniere reponse de l'IA, titre
+// de l'onglet, dossier) : la dictee les reconnait sans rien configurer.
+// Un mot en majuscule en debut de phrase n'est pas retenu (« Voici », « Le »).
+function extractProperNouns(text) {
+  const counts = new Map();
+  const pattern = /\p{Lu}[\p{L}]+(?:[-'’][\p{L}]+)*/gu;
+  for (const match of String(text).matchAll(pattern)) {
+    const before = String(text).slice(0, match.index).trimEnd();
+    if (!before || /[.!?:\n#*>-]$/.test(before) || match[0].length < 4) {
+      continue;
+    }
+    counts.set(match[0], (counts.get(match[0]) || 0) + 1);
+  }
+  return [...counts.entries()].sort((a, b) => b[1] - a[1]).map(([word]) => word);
+}
+
+async function refreshJarvisContext(session) {
+  if (!session) {
+    return;
+  }
+  const reply = await window.launcher.getLastReply(session.id).catch(() => null);
+  const folder = String(session.cwd || "").split(/[\\/]/).filter(Boolean).pop() || "";
+  jarvisListener.contextWords = [...new Set([...extractProperNouns(reply?.text || ""), session.title, folder].filter((word) => word && word.length >= 4))].slice(0, 25);
+}
+
+// Lexique personnel d'abord, puis vocabulaire de la conversation.
+function jarvisVocabulary() {
+  return [...new Set([...jarvisLexicon(), ...(jarvisListener.contextWords || [])])];
+}
+
+// Vocabulaire technique + noms propres connus, donnes a Whisper.
+function jarvisDictationPrompt() {
+  const words = jarvisVocabulary();
+  return words.length ? `${JARVIS_DICTATION_PROMPT} ${words.join(", ")}.` : JARVIS_DICTATION_PROMPT;
+}
+
+// Corrige les noms propres mal reconnus (ils « sonnent » comme un mot connu).
+function correctDictation(text) {
+  const corrected = window.JarvisLexicon.apply(text, jarvisVocabulary());
+  if (corrected.fixes.length) {
+    jarvisLog(`correction : ${corrected.fixes.join(" ; ")}`);
+  }
+  return corrected.text;
+}
+
+// Mention ajoutee aux demandes dictees : l'IA comprend les mots mal reconnus
+// sans demander « tu voulais dire… ? ».
+const JARVIS_DICTATION_NOTE = "(dictée vocale : des mots peuvent être mal reconnus, comprends le sens voulu sans le signaler)";
+
+function isJarvisDictationNote() {
+  return window.localStorage.getItem("jarvisDictationNote") !== "0";
+}
+
+function isJarvisAutoSend() {
+  return window.localStorage.getItem("jarvisAutoSend") !== "0";
 }
 
 function isJarvisWakeWordEnabled() {
@@ -5658,6 +5740,8 @@ const jarvisListener = {
   preRoll: [],
   loudMs: 0,
   quietMs: 0,
+  lastVoiceAt: 0,
+  contextWords: [], // noms propres de la conversation (dictee)
   commandStartedAt: 0,
   target: null,
   queue: [], // phrases terminees en attente de transcription
@@ -5764,6 +5848,13 @@ function runWakeDetector(samples) {
     .then(({ hey: score }) => {
       listener.stats.maxScore = Math.max(listener.stats.maxScore, score);
       if (score >= VAD.wakeScore && listener.mode === "wake" && Date.now() >= listener.wakeCooldownUntil) {
+        const voiceHeard = Date.now() - listener.lastVoiceAt <= VAD.wakeVoiceWindowMs;
+        if (score < VAD.wakeStrongScore || !voiceHeard) {
+          // Whisper tranchera a la fin de la phrase (WAKE_WORD).
+          listener.wakeCooldownUntil = Date.now() + VAD.wakeCooldownMs;
+          jarvisLog(`openWakeWord ${score.toFixed(2)} ${voiceHeard ? "trop faible" : "sans voix entendue"} : confirmation par Whisper`);
+          return;
+        }
         jarvisLog(`mot d'activation detecte (openWakeWord, score ${score.toFixed(2)})`);
         listener.wakeCooldownUntil = Date.now() + VAD.wakeCooldownMs;
         listener.detector.reset();
@@ -5827,6 +5918,9 @@ function onJarvisAudio(samples, sampleRate) {
   }
   const rms = Math.sqrt(sum / samples.length);
   const threshold = Math.max(VAD.minThreshold, listener.noise * 3);
+  if (rms > threshold) {
+    listener.lastVoiceAt = Date.now();
+  }
   const copy = new Float32Array(samples);
   logListenerStats(rms, threshold);
   runWakeDetector(copy);
@@ -5912,6 +6006,7 @@ async function handleJarvisSegment(segment) {
     showJarvisHud("Transcription…");
   }
   let text = "";
+  let engine = "";
   const started = Date.now();
   if (segment.loudMs < VAD.minSpeechMs) {
     jarvisLog(`segment ignore : ${Math.round(segment.loudMs)} ms de voix seulement`);
@@ -5919,15 +6014,17 @@ async function handleJarvisSegment(segment) {
     try {
       // L'indice « JARVIS » ne sert qu'a la veille : apres l'activation, il
       // pousse Whisper a ecrire « J'avis. » sur du silence.
-      const result = await window.launcher.voiceTranscribe(await segmentToWav16k(segment), mode === "wake" ? "JARVIS" : "");
+      const wake = mode === "wake";
+      const result = await window.launcher.voiceTranscribe(await segmentToWav16k(segment), wake ? "JARVIS" : jarvisDictationPrompt(), mode);
       text = result?.text || "";
+      engine = result?.engine || "";
       if (result?.error) {
         jarvisLog(`erreur Whisper : ${result.error}`);
       }
     } catch (error) {
       jarvisLog(`erreur Whisper : ${error?.message || error}`);
     }
-    jarvisLog(`Whisper (${mode}, ${Math.round(segment.ms)} ms d'audio, ${Date.now() - started} ms) : « ${text} »`);
+    jarvisLog(`Whisper (${mode}, ${engine}, ${Math.round(segment.ms)} ms d'audio, ${Date.now() - started} ms) : « ${text} »`);
   }
   if (listener.mode !== mode) {
     return;
@@ -5944,13 +6041,15 @@ async function handleJarvisSegment(segment) {
     // « JARVIS, explique ce fichier » : la demande suit directement.
     const rest = stripWakeWords(text.slice(match.index));
     if (rest.split(/\s+/).length >= 2) {
-      submitJarvisCommand(rest, jarvisCommandTarget());
+      const target = jarvisCommandTarget();
+      await refreshJarvisContext(target?.session);
+      submitJarvisCommand(correctDictation(rest), target);
     } else {
       beginJarvisCommand(jarvisCommandTarget());
     }
     return;
   }
-  text = stripWakeWords(text);
+  text = correctDictation(stripWakeWords(text));
   if (isWhisperHallucination(text)) {
     if (text) {
       jarvisLog(`phrase inventee par Whisper ignoree : « ${text} »`);
@@ -5976,6 +6075,7 @@ function jarvisCommandTarget() {
 
 function beginJarvisCommand(target) {
   stopJarvisSpeech();
+  refreshJarvisContext(target?.session);
   jarvisListener.mode = "command";
   jarvisListener.target = target;
   document.body.classList.add("jarvis-dictating");
@@ -6021,11 +6121,19 @@ function submitJarvisCommand(text, target) {
     endJarvisCommand("L'onglet a été fermé.", 2000);
     return;
   }
-  pasteToSession(session, text, true);
+  // Sans envoi automatique, le texte est seulement ecrit dans le prompt : on
+  // le corrige au clavier puis Entree.
+  const autoSend = isJarvisAutoSend();
+  pasteToSession(session, isJarvisDictationNote() ? `${text} ${JARVIS_DICTATION_NOTE}` : text, autoSend);
   setActiveSession(session.id);
   endJarvisCommand();
-  showJarvisHud(`Envoyé à ${getProfileLabel(sessionProfileId(session)) || "l'IA"}`, text);
-  hideJarvisHud(2000);
+  if (autoSend) {
+    showJarvisHud(`Envoyé à ${getProfileLabel(sessionProfileId(session)) || "l'IA"}`, text);
+  } else {
+    showJarvisHud("Écrit dans le prompt : corrige si besoin, puis Entrée", text);
+    session.terminal?.focus();
+  }
+  hideJarvisHud(autoSend ? 2000 : 2600);
 }
 
 // Echap / clic sur le grand reacteur : annule l'ecoute ou la lecture.
@@ -6138,10 +6246,9 @@ function applyJarvisMode(active) {
   if (active && !jarvis.core) {
     jarvis.core = new window.JarvisCore(elements.jarvisButton, { size: 32 });
     svg.classList.add("hidden");
-    // Voix qualite : modele charge a l'avance (~15 s) pour repondre sans attendre.
-    if (loadJarvisVoiceSettings().engine === "quality") {
-      window.launcher.qualityVoicePrepare();
-    }
+    // Pack carte graphique (voix qualite, dictee precise) : charge a l'avance
+    // (~20 s) pour repondre sans attendre ; ignore s'il n'est pas installe.
+    window.launcher.qualityVoicePrepare();
   } else if (!active && jarvis.core) {
     cancelJarvisInteraction();
     stopJarvisListener();
@@ -6339,9 +6446,21 @@ function openJarvisControls() {
       <input type="checkbox" />
       <span>Écouter le mot d'activation « JARVIS » (micro analysé sur ce PC uniquement)</span>
     </label>
+    <label class="switch-row jarvis-autosend">
+      <input type="checkbox" />
+      <span>Envoyer automatiquement la demande dictée (sinon, elle est écrite dans le prompt pour être corrigée avant Entrée)</span>
+    </label>
     <label class="switch-row jarvis-autoread">
       <input type="checkbox" />
       <span>Lire automatiquement chaque réponse de l'IA (onglet affiché)</span>
+    </label>
+    <label class="switch-row jarvis-note">
+      <input type="checkbox" />
+      <span>Prévenir l'IA que la demande est dictée (elle comprend les mots mal reconnus sans le faire remarquer)</span>
+    </label>
+    <label class="jarvis-lexicon">
+      <span>Lexique (facultatif) : les noms propres de la conversation sont déjà reconnus automatiquement ; ajoute ici ceux qui reviennent souvent, un par ligne.</span>
+      <textarea rows="4" spellcheck="false" placeholder="Bormes-les-Mimosas"></textarea>
     </label>`;
   if (jarvisListener.heard.length) {
     const heard = document.createElement("p");
@@ -6364,6 +6483,21 @@ function openJarvisControls() {
   wakeWord.addEventListener("change", () => {
     window.localStorage.setItem("jarvisWakeWord", wakeWord.checked ? "1" : "0");
     syncJarvisListener();
+  });
+  const autoSend = modal.body.querySelector(".jarvis-autosend input");
+  autoSend.checked = isJarvisAutoSend();
+  autoSend.addEventListener("change", () => {
+    window.localStorage.setItem("jarvisAutoSend", autoSend.checked ? "1" : "0");
+  });
+  const note = modal.body.querySelector(".jarvis-note input");
+  note.checked = isJarvisDictationNote();
+  note.addEventListener("change", () => {
+    window.localStorage.setItem("jarvisDictationNote", note.checked ? "1" : "0");
+  });
+  const lexicon = modal.body.querySelector(".jarvis-lexicon textarea");
+  lexicon.value = jarvisLexicon().join("\n");
+  lexicon.addEventListener("input", () => {
+    window.localStorage.setItem("jarvisLexicon", lexicon.value);
   });
   const autoRead = modal.body.querySelector(".jarvis-autoread input");
   autoRead.checked = isJarvisAutoRead();
@@ -6752,12 +6886,26 @@ function openJarvisCorePreview() {
           }
         }
       });
+    } else if (quality.installed && !quality.asrInstalled) {
+      info.textContent = `Voix qualité installée (${quality.gpu.name}). Nouveau : dictée précise sur la carte graphique (bien moins de fautes, ~0,4 s par phrase). Téléchargement de 1,6 Go.`;
+      button.className = "primary-button";
+      button.textContent = "Ajouter la dictée précise";
+      button.addEventListener("click", async () => {
+        button.hidden = true;
+        showProgress({ percent: 0, step: "préparation" });
+        const off = window.launcher.onQualityVoiceProgress(showProgress);
+        await window.launcher.qualityVoiceInstall({ onlyAsr: true }).catch((error) => ({ error: error.message }));
+        off();
+        if (modal.overlay.isConnected) {
+          renderVoicePanel();
+        }
+      });
     } else if (quality.installed) {
-      info.textContent = `Voix qualité installée (${quality.gpu.name}).`;
+      info.textContent = `Voix qualité et dictée précise installées (${quality.gpu.name}).`;
       button.className = "ghost-button danger";
       button.textContent = "Désinstaller";
       button.addEventListener("click", async () => {
-        if (!window.confirm("Désinstaller la voix qualité (environ 9 Go libérés) ?")) {
+        if (!window.confirm("Désinstaller la voix qualité et la dictée précise (environ 11 Go libérés) ?")) {
           return;
         }
         settings.engine = "tom";
@@ -6768,7 +6916,7 @@ function openJarvisCorePreview() {
     } else {
       info.textContent = quality.error
         ? `Échec de la dernière installation : ${quality.error}`
-        : `Voix qualité : plus naturelle, calculée par ta carte graphique (${quality.gpu.name}). Téléchargement unique d'environ 6 Go (9 Go sur le disque).`;
+        : `Voix qualité et dictée précise, calculées par ta carte graphique (${quality.gpu.name}) : voix plus naturelle, beaucoup moins de fautes dans le texte dicté. Téléchargement unique d'environ 8 Go (11 Go sur le disque).`;
       if (!quality.enoughMemory) {
         info.textContent += " Attention : moins de 4 Go de mémoire graphique, la voix risque de ne pas fonctionner.";
       }
@@ -6854,6 +7002,14 @@ async function initJarvis() {
 // Notes de version affichees apres une mise a jour. La cle est le numero de
 // version, la valeur la liste des nouveautes a montrer.
 const CHANGELOG = {
+  "0.1.29": [
+    "Dictée bien plus précise : nouveau modèle de reconnaissance pour le texte des demandes, et vocabulaire technique reconnu (features, commit, build…).",
+    "Avec une carte graphique NVIDIA : dictée encore plus précise et quasi instantanée, à ajouter d'un clic au pack de la voix qualité.",
+    "Le module à réacteur ne se réveille plus tout seul : un « Jarvis » douteux est vérifié avant de passer en écoute.",
+    "Les noms propres de la conversation (villes, projets…) sont reconnus à la dictée, et l'IA comprend les mots mal entendus sans le faire remarquer.",
+    "Nouvelle option : écrire la demande dictée dans le prompt sans l'envoyer, pour la corriger avant Entrée.",
+    "Températures et unités lues correctement (« 22 degrés Celsius », « 30 kilomètres heure »)."
+  ],
   "0.1.28": [
     "Le module à réacteur peut prendre une voix bien plus naturelle, calculée par la carte graphique (NVIDIA) : installation en un clic depuis sa fenêtre, premier mot en moins d'une seconde.",
     "Meilleure prononciation : versions, fichiers, raccourcis, unités et termes techniques sont lus correctement."

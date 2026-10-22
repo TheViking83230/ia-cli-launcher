@@ -1042,12 +1042,22 @@ app.whenReady().then(() => {
   ipcMain.handle("jarvis:set", (_event, patch) => jarvis.setState(patch));
   ipcMain.handle("voice:status", () => piper.status());
   ipcMain.handle("voice:speak", (_event, request) => piper.speak(request || {}));
-  ipcMain.handle("voice:transcribe", (_event, { wavBytes, prompt }) => whisper.transcribe(wavBytes, prompt));
+  // Texte d'une demande : carte graphique (dictee precise du pack) si elle est
+  // prete, sinon whisper.cpp sur processeur.
+  ipcMain.handle("voice:transcribe", async (_event, { wavBytes, prompt, kind }) => {
+    if (kind === "command") {
+      const result = await qualityVoice.transcribe(wavBytes, prompt);
+      if (!result.error) {
+        return { ...result, engine: "carte graphique" };
+      }
+    }
+    return { ...(await whisper.transcribe(wavBytes, prompt, kind)), engine: "processeur" };
+  });
   ipcMain.handle("voice:wakeword", () => whisper.wakewordAssets());
   ipcMain.on("voice:log", (_event, line) => whisper.logListening(line));
   ipcMain.handle("voice:quality-status", () => qualityVoice.status());
-  ipcMain.handle("voice:quality-install", (event) =>
-    qualityVoice.installPack((progress) => !event.sender.isDestroyed() && event.sender.send("voice:quality-progress", progress))
+  ipcMain.handle("voice:quality-install", (event, options) =>
+    qualityVoice.installPack((progress) => !event.sender.isDestroyed() && event.sender.send("voice:quality-progress", progress), options || {})
   );
   ipcMain.handle("voice:quality-uninstall", () => qualityVoice.uninstallPack());
   ipcMain.handle("voice:quality-speak", (event, { id, text }) =>

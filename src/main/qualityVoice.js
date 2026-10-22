@@ -1,6 +1,7 @@
-// Voix « qualite » de JARVIS : Qwen3-TTS 0.6B sur carte graphique NVIDIA.
+// Voix « qualite » de JARVIS : Qwen3-TTS 0.6B sur carte graphique NVIDIA, et
+// dictee precise (Whisper large-v3-turbo) sur la meme carte.
 //
-// L'installeur reste unique : ce pack (Python, PyTorch CUDA, modele : ~6 Go telecharges, ~9 Go installes) est
+// L'installeur reste unique : ce pack (Python, PyTorch CUDA, modeles : ~8 Go telecharges, ~11 Go installes) est
 // installe depuis la fenetre JARVIS, une seule fois, hors du dossier de
 // l'application (il survit aux mises a jour). Sans carte NVIDIA ou sans pack,
 // la voix Tom (Piper, processeur) reste utilisee.
@@ -22,21 +23,27 @@ const PINNED_TORCH = ["torch==2.7.1+cu128", "torchaudio==2.7.1+cu128"];
 const TORCH = [...PINNED_TORCH, "--index-url", "https://download.pytorch.org/whl/cu128"];
 const PACKAGES = ["faster-qwen3-tts==0.5.4", "transformers==5.15.1", "soundfile"];
 const MODEL = { repo: "Qwen/Qwen3-TTS-12Hz-0.6B-Base", revision: "5d83992436eae1d760afd27aff78a71d676296fc" };
+const ASR = {
+  repo: "openai/whisper-large-v3-turbo",
+  revision: "41f01f3fe87f28c78e2fbf8b568835947dd65ed9",
+  files: ["*.json", "*.txt", "model.safetensors"]
+};
 const QUIET_MS = 30 * 60 * 1000;
 // Etapes de l'installation : poids dans la barre de progression et, pour les
 // telechargements, dossier suivi (peu de fichiers : mesure rapide) et taille
 // attendue a la fin de l'etape (Go) ; sinon duree approximative.
 const STEPS = [
   { id: "python", label: "Python", weight: 2, seconds: 15 },
-  { id: "torch", label: "Téléchargement du moteur PyTorch CUDA (3,3 Go)", weight: 42, dir: "paquets", size: 3.35 },
-  { id: "packages", label: "Téléchargement du moteur de voix", weight: 6, dir: "paquets", size: 3.75 },
-  { id: "setup", label: "Installation du moteur", weight: 12, seconds: 120 },
-  { id: "model", label: "Téléchargement du modèle de voix (2,5 Go)", weight: 33, dir: "modele", size: 2.52 },
+  { id: "torch", label: "Téléchargement du moteur PyTorch CUDA (3,3 Go)", weight: 36, dir: "paquets", size: 3.35 },
+  { id: "packages", label: "Téléchargement du moteur de voix", weight: 5, dir: "paquets", size: 3.75 },
+  { id: "setup", label: "Installation du moteur", weight: 10, seconds: 120 },
+  { id: "model", label: "Téléchargement du modèle de voix (2,5 Go)", weight: 27, dir: "modele", size: 2.52 },
+  { id: "asr", label: "Téléchargement du modèle de dictée (1,6 Go)", weight: 15, dir: "dictee", size: 1.62 },
   { id: "test", label: "Premier essai de la voix", weight: 5, seconds: 30 }
 ];
 
 const install = { running: false, percent: 0, step: "", error: "" };
-const server = { child: null, ready: null, nextId: 1, pending: new Map(), quietTimer: null };
+const server = { child: null, ready: null, started: false, asr: false, nextId: 1, pending: new Map(), quietTimer: null };
 
 function packRoot() {
   const base = process.env.LOCALAPPDATA || app.getPath("userData");
@@ -49,6 +56,15 @@ function pythonExe() {
 
 function modelDir() {
   return path.join(packRoot(), "modele");
+}
+
+function asrDir() {
+  return path.join(packRoot(), "dictee");
+}
+
+// Le marqueur n'est ecrit qu'une fois le modele de dictee entierement telecharge.
+function asrInstalled() {
+  return fs.existsSync(path.join(asrDir(), "complet"));
 }
 
 function markerFile() {
@@ -87,6 +103,7 @@ async function status() {
     gpu,
     enoughMemory: Boolean(gpu && gpu.memoryMb >= 4000),
     installed: isInstalled(),
+    asrInstalled: asrInstalled(),
     installing: install.running,
     percent: install.percent,
     step: install.step,
@@ -140,7 +157,8 @@ async function download(url, file) {
 }
 
 // Installe le pack ; onProgress({ percent, step, done, error }) suit l'avancement.
-async function installPack(onProgress) {
+// onlyAsr : ajoute seulement la dictee precise a un pack deja installe.
+async function installPack(onProgress, { onlyAsr = false } = {}) {
   if (install.running) {
     return { error: "Installation déjà en cours." };
   }
@@ -148,24 +166,33 @@ async function installPack(onProgress) {
     return { error: "La voix qualité demande Windows et une carte graphique NVIDIA." };
   }
   const root = packRoot();
+  if (onlyAsr && !isInstalled()) {
+    return { error: "Installe d'abord la voix qualité." };
+  }
   stopServer();
+  const plan = onlyAsr ? STEPS.filter((step) => step.id === "asr" || step.id === "test") : STEPS;
+  const scale = 100 / plan.reduce((sum, step) => sum + step.weight, 0);
   try {
-    // Vide le dossier sans le supprimer lui-meme (Windows refuse si un autre
-    // programme y a un acces ouvert). Les paquets deja telecharges sont gardes
-    // pour qu'un nouvel essai ne reprenne pas tout le telechargement.
-    fs.mkdirSync(root, { recursive: true });
-    for (const entry of fs.readdirSync(root).filter((name) => name !== "paquets")) {
-      fs.rmSync(path.join(root, entry), { recursive: true, force: true, maxRetries: 5 });
+    if (onlyAsr) {
+      fs.rmSync(asrDir(), { recursive: true, force: true, maxRetries: 5 });
+    } else {
+      // Vide le dossier sans le supprimer lui-meme (Windows refuse si un autre
+      // programme y a un acces ouvert). Les paquets deja telecharges sont gardes
+      // pour qu'un nouvel essai ne reprenne pas tout le telechargement.
+      fs.mkdirSync(root, { recursive: true });
+      for (const entry of fs.readdirSync(root).filter((name) => name !== "paquets")) {
+        fs.rmSync(path.join(root, entry), { recursive: true, force: true, maxRetries: 5 });
+      }
+      fs.mkdirSync(path.join(root, "python"), { recursive: true });
     }
-    fs.mkdirSync(path.join(root, "python"), { recursive: true });
   } catch (error) {
     install.error = `Dossier ${root} inaccessible : ${error.message}`;
     return { error: install.error };
   }
   Object.assign(install, { running: true, percent: 0, step: "", error: "" });
-  const logStream = fs.createWriteStream(path.join(root, "installation.log"));
+  const logStream = fs.createWriteStream(path.join(root, "installation.log"), { flags: onlyAsr ? "a" : "w" });
   let done = 0;
-  let current = STEPS[0];
+  let current = plan[0];
   const report = (extra = {}) => onProgress({ percent: install.percent, step: install.step, ...extra });
   let stepStart = Date.now();
   let sizeBefore = 0;
@@ -173,24 +200,71 @@ async function installPack(onProgress) {
     const ratio = current.size
       ? (folderSize(path.join(root, current.dir)) / 1e9 - sizeBefore) / (current.size - sizeBefore)
       : (Date.now() - stepStart) / 1000 / current.seconds;
-    install.percent = Math.round(done + current.weight * Math.min(0.97, Math.max(0, ratio)));
+    install.percent = Math.round(done + current.weight * scale * Math.min(0.97, Math.max(0, ratio)));
     report();
   }, 1500);
   const begin = (id) => {
     const previous = current;
     current = STEPS.find((step) => step.id === id);
-    sizeBefore = previous.dir === current.dir ? previous.size : 0;
+    sizeBefore = previous !== current && previous.dir === current.dir ? previous.size : 0;
     stepStart = Date.now();
     install.step = current.label;
     logStream.write(`\n=== ${current.label}\n`);
     report();
   };
   const finish = () => {
-    done += current.weight;
+    done += current.weight * scale;
     install.percent = done;
   };
+  const py = pythonExe();
+  const fetchModel = (model, dir) =>
+    run(
+      py,
+      [
+        "-c",
+        "import sys, json\nfrom huggingface_hub import snapshot_download\nsnapshot_download(sys.argv[1], revision=sys.argv[2], local_dir=sys.argv[3], allow_patterns=json.loads(sys.argv[4]))",
+        model.repo,
+        model.revision,
+        dir,
+        JSON.stringify(model.files || ["*"])
+      ],
+      logStream
+    );
   try {
-    const py = pythonExe();
+    if (!onlyAsr) {
+      await installEngine();
+    }
+    begin("asr");
+    await fetchModel(ASR, asrDir());
+    fs.writeFileSync(path.join(asrDir(), "complet"), new Date().toISOString());
+    finish();
+    begin("test");
+    if (!onlyAsr) {
+      fs.writeFileSync(markerFile(), JSON.stringify({ version: PACK_VERSION, date: new Date().toISOString() }));
+    }
+    const result = await speak("Voix de qualité opérationnelle.", () => {});
+    if (result.error) {
+      if (!onlyAsr) {
+        fs.rmSync(markerFile(), { force: true });
+      }
+      throw new Error(result.error);
+    }
+    finish();
+    install.percent = 100;
+    report({ done: true });
+    return { ok: true };
+  } catch (error) {
+    install.error = error.message;
+    logStream.write(`\nERREUR : ${error.stack || error.message}\n`);
+    report({ done: true, error: error.message });
+    return { error: error.message };
+  } finally {
+    clearInterval(ticker);
+    install.running = false;
+    logStream.end();
+  }
+
+  async function installEngine() {
     begin("python");
     const zip = path.join(root, "python.zip");
     await download(PYTHON_URL, zip);
@@ -219,32 +293,8 @@ async function installPack(onProgress) {
     fs.rmSync(wheels, { recursive: true, force: true });
     finish();
     begin("model");
-    await run(
-      py,
-      ["-c", "import sys\nfrom huggingface_hub import snapshot_download\nsnapshot_download(sys.argv[1], revision=sys.argv[2], local_dir=sys.argv[3])", MODEL.repo, MODEL.revision, modelDir()],
-      logStream
-    );
+    await fetchModel(MODEL, modelDir());
     finish();
-    begin("test");
-    fs.writeFileSync(markerFile(), JSON.stringify({ version: PACK_VERSION, date: new Date().toISOString() }));
-    const result = await speak("Voix de qualité opérationnelle.", () => {});
-    if (result.error) {
-      fs.rmSync(markerFile(), { force: true });
-      throw new Error(result.error);
-    }
-    finish();
-    install.percent = 100;
-    report({ done: true });
-    return { ok: true };
-  } catch (error) {
-    install.error = error.message;
-    logStream.write(`\nERREUR : ${error.stack || error.message}\n`);
-    report({ done: true, error: error.message });
-    return { error: error.message };
-  } finally {
-    clearInterval(ticker);
-    install.running = false;
-    logStream.end();
   }
 }
 
@@ -268,7 +318,13 @@ function startServer() {
   server.ready = new Promise((resolve) => {
     const child = spawn(pythonExe(), ["-I", serverScript()], {
       windowsHide: true,
-      env: { ...process.env, PYTHONUTF8: "1", HF_HUB_OFFLINE: "1", JARVIS_QUALITY_MODEL: modelDir() }
+      env: {
+        ...process.env,
+        PYTHONUTF8: "1",
+        HF_HUB_OFFLINE: "1",
+        JARVIS_QUALITY_MODEL: modelDir(),
+        JARVIS_ASR_MODEL: asrInstalled() ? asrDir() : ""
+      }
     });
     server.child = child;
     const logFile = fs.createWriteStream(path.join(packRoot(), "serveur.log"));
@@ -281,6 +337,8 @@ function startServer() {
         return;
       }
       if (message.ready) {
+        server.started = server.child === child;
+        server.asr = server.started && Boolean(message.asr);
         resolve({ ok: true });
       } else if (message.fatal) {
         resolve({ error: message.fatal });
@@ -293,7 +351,7 @@ function startServer() {
           request.onChunk({ sampleRate: message.sr, pcm: new Uint8Array(Buffer.from(message.pcm, "base64")) });
         } else {
           server.pending.delete(message.id);
-          request.resolve(message.error ? { error: message.error } : { ok: true });
+          request.resolve(message.error ? { error: message.error } : typeof message.text === "string" ? { text: message.text } : { ok: true });
         }
       }
     });
@@ -302,8 +360,7 @@ function startServer() {
       resolve({ error: `La voix qualité s'est arrêtée (code ${code}).` });
       failPending("La voix qualité s'est arrêtée.");
       if (server.child === child) {
-        server.child = null;
-        server.ready = null;
+        Object.assign(server, { child: null, ready: null, started: false, asr: false });
       }
     });
   });
@@ -317,8 +374,7 @@ function stopServer() {
     const child = server.child;
     setTimeout(() => child.kill(), 3000);
   }
-  server.child = null;
-  server.ready = null;
+  Object.assign(server, { child: null, ready: null, started: false, asr: false });
   failPending("La voix qualité a été arrêtée.");
 }
 
@@ -344,6 +400,22 @@ async function speak(text, onChunk) {
   return result;
 }
 
+// Dictee precise sur la carte graphique. Seulement si le serveur est deja pret :
+// sinon { error } tout de suite, et la dictee sur processeur prend le relais
+// (le serveur est demarre pour les suivantes).
+function transcribe(wavBytes, prompt = "") {
+  if (!server.started || !server.asr) {
+    prepare();
+    return Promise.resolve({ error: "Dictée précise pas encore prête." });
+  }
+  const id = server.nextId++;
+  return new Promise((resolve) => {
+    server.pending.set(id, { resolve, onChunk: () => {} });
+    const wav = Buffer.from(wavBytes).toString("base64");
+    server.child.stdin.write(`${JSON.stringify({ cmd: "transcribe", id, wav, prompt })}\n`);
+  });
+}
+
 // Interrompt la phrase en cours et celles en attente.
 function stopSpeaking() {
   if (server.child) {
@@ -360,4 +432,4 @@ function prepare() {
   }
 }
 
-module.exports = { status, installPack, uninstallPack, speak, stopSpeaking, stopServer, prepare };
+module.exports = { status, installPack, uninstallPack, speak, transcribe, stopSpeaking, stopServer, prepare };

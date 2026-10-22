@@ -69,6 +69,17 @@
     // Identifiants de code : getLastReply -> get Last Reply ; snake_case -> snake case.
     out = out.replace(/\b([a-z]+)((?:[A-Z][a-z0-9]+)+)\b/g, (_, head, rest) => `${head} ${rest.replace(/([A-Z])/g, " $1").trim()}`);
     out = out.replace(/\b(\w+)_(\w+)\b/g, (match) => match.replace(/_/g, " "));
+    // Temperatures et mesures courantes (meteo) : 22 °C -> 22 degrés Celsius,
+    // 18–24 -> 18 à 24, −3 -> moins 3, 30 km/h -> 30 kilomètres heure.
+    out = out
+      .replace(/(\d)\s?[–—]\s?(-?\d)/g, "$1 à $2")
+      .replace(/\b([Ee]ntre \d+) à /g, "$1 et ")
+      .replace(/[−-](\d)/g, (match, digit, offset, whole) => (/[\w.]/.test(whole[offset - 1] || "") ? match : `moins ${digit}`))
+      .replace(/\s?°\s?C\b/g, " degrés Celsius")
+      .replace(/\s?°\s?F\b/g, " degrés Fahrenheit")
+      .replace(/(\d)\s?°/g, "$1 degrés")
+      .replace(/(\d)\s?km\/h\b/g, "$1 kilomètres heure")
+      .replace(/(\d)\s?(km|cm|mm)\b/g, (_, digit, unit) => `${digit} ${{ km: "kilomètres", cm: "centimètres", mm: "millimètres" }[unit]}`);
     // Unites apres un nombre : 15 Mo -> 15 mégaoctets.
     out = out.replace(/(\d)\s?(Ko|Mo|Go|To|KB|MB|GB|ms|kHz|MHz|GHz|Hz|px|fps)\b/g, (_, digit, unit) => `${digit} ${UNITS[unit]}`);
     // Symboles.

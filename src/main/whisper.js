@@ -20,8 +20,8 @@ function exePath() {
   return path.join(whisperRoot(), engineDir, WHISPER.exe[process.platform] || "");
 }
 
-function modelPath() {
-  return path.join(whisperRoot(), "models", WHISPER.model);
+function modelPath(file = WHISPER.model) {
+  return path.join(whisperRoot(), "models", file);
 }
 
 function isAvailable() {
@@ -29,8 +29,9 @@ function isAvailable() {
 }
 
 // Transcrit un WAV 16 kHz ; renvoie { text } ou { error }. prompt oriente
-// la reconnaissance (ex. « JARVIS » pour le mot d'activation).
-function transcribe(wavBytes, prompt = "") {
+// la reconnaissance (ex. « JARVIS » pour le mot d'activation). kind :
+// "wake" (veille, modele rapide) ou "command" (texte d'une demande, modele precis).
+function transcribe(wavBytes, prompt = "", kind = "wake") {
   return new Promise((resolve) => {
     if (!isAvailable()) {
       resolve({ error: "Dictée absente de cette installation." });
@@ -45,7 +46,14 @@ function transcribe(wavBytes, prompt = "") {
       // Bibliotheques partagees livrees a cote de l'executable.
       env.LD_LIBRARY_PATH = [path.dirname(exe), env.LD_LIBRARY_PATH].filter(Boolean).join(":");
     }
-    const args = ["-m", modelPath(), "-f", input, "-l", "fr", "-nt", "-np", "-t", threads];
+    const precise = kind === "command" && fs.existsSync(modelPath(WHISPER.commandModel));
+    const args = ["-m", modelPath(precise ? WHISPER.commandModel : WHISPER.model), "-f", input, "-l", "fr", "-nt", "-np", "-t", threads];
+    if (precise) {
+      // Fenetre d'analyse reduite a la duree de la phrase (+2 s) : 2 a 3 fois
+      // plus rapide qu'avec les 30 s par defaut.
+      const seconds = Math.max(0, wavBytes.byteLength - 44) / 32000;
+      args.push("-ac", String(Math.min(1500, Math.max(384, Math.ceil(((seconds + 2) / 30) * 1500 / 64) * 64))));
+    }
     if (prompt) {
       args.push("--prompt", prompt);
     }

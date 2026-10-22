@@ -44,7 +44,11 @@ const WHISPER = {
   // Modele "base" quantifie : 57 Mo, transcription francaise fiable et rapide
   // sans carte graphique.
   model: "ggml-base-q5_1.bin",
-  modelUrl: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base-q5_1.bin"
+  modelUrl: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base-q5_1.bin",
+  // Modele "small" (190 Mo) pour le texte des demandes : bien plus precis,
+  // ~1,5 s par phrase sur processeur. "base" reste pour reperer « Jarvis ».
+  commandModel: "ggml-small-q5_1.bin",
+  commandModelUrl: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small-q5_1.bin"
 };
 
 // Mot d'activation « Hey Jarvis » : modeles openWakeWord (executes dans la
