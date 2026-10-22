@@ -1338,6 +1338,58 @@ function pasteToSession(session, text, submit) {
   }
 }
 
+// --- Images et fichiers colles dans la CLI ---------------------------------------
+// Les CLI (Claude Code, Codex...) reconnaissent un chemin d'image colle et
+// l'analysent : on colle donc des chemins, entre guillemets si besoin.
+async function pastePathsToSession(session, paths) {
+  const text = await window.launcher.quotePaths(paths);
+  if (text) {
+    pasteWithTrailingSpace(session, text);
+    flashStatus(paths.length > 1 ? `${paths.length} fichiers collés` : `Fichier collé : ${paths[0]}`);
+  }
+}
+
+// L'espace est tape apres le collage : un chemin colle seul est reconnu
+// comme image par Claude Code (affiche [Image #1]).
+function pasteWithTrailingSpace(session, text) {
+  pasteToSession(session, text, false);
+  window.launcher.writeTerminal(session.id, " ");
+}
+
+// Image du presse-papiers (capture d'ecran...) : enregistree en PNG
+// temporaire puis collee sous forme de chemin. Renvoie false sans image.
+async function pasteClipboardImage(session) {
+  const saved = await window.launcher.saveClipboardImage();
+  if (!saved) {
+    return false;
+  }
+  pasteWithTrailingSpace(session, saved.text);
+  flashStatus("Image collée : l'IA va l'analyser avec ton message");
+  return true;
+}
+
+// Ctrl+V dans un terminal : le texte reste gere par xterm ; une image ou des
+// fichiers copies (Explorateur) sont interceptes et colles comme chemins.
+function handleTerminalPaste(session, event) {
+  const data = event.clipboardData;
+  if (!data || data.types.includes("text/plain")) {
+    return;
+  }
+  const files = Array.from(data.files || []);
+  const paths = files.map((file) => window.launcher.getPathForFile(file)).filter(Boolean);
+  const hasImage = Array.from(data.items || []).some((item) => item.type.startsWith("image/"));
+  if (!paths.length && !hasImage) {
+    return;
+  }
+  event.preventDefault();
+  event.stopPropagation();
+  if (paths.length) {
+    pastePathsToSession(session, paths);
+  } else {
+    pasteClipboardImage(session);
+  }
+}
+
 function terminalSessions() {
   return [...state.sessions.values()].filter((s) => s.type === "terminal" && !s.tab.classList.contains("ended"));
 }
@@ -1849,6 +1901,9 @@ async function openTerminalSession({ title, accent, starter, replayText, spec })
     window.launcher.showTerminalContextMenu(session.id, terminal.getSelection());
   });
 
+  // Phase de capture : passe avant le collage texte de xterm.
+  session.container.addEventListener("paste", (event) => handleTerminalPaste(session, event), true);
+
   terminal.attachCustomKeyEventHandler((event) => {
     if (event.type !== "keydown") {
       return true;
@@ -1864,6 +1919,8 @@ async function openTerminalSession({ title, accent, starter, replayText, spec })
       navigator.clipboard.readText().then((text) => {
         if (text) {
           window.launcher.writeTerminal(session.id, text);
+        } else {
+          pasteClipboardImage(session);
         }
       });
       return false;
@@ -2629,10 +2686,10 @@ async function handleDrop(event) {
     return;
   }
 
-  const file = files[0];
-  if (file.path) {
-    await window.launcher.pasteFilePath(active.id, file.path);
-    elements.sessionMeta.textContent = `Fichier: ${file.path}`;
+  // Electron 32+ : plus de File.path, le chemin passe par le preload.
+  const paths = files.map((file) => window.launcher.getPathForFile(file)).filter(Boolean);
+  if (paths.length) {
+    await pastePathsToSession(active, paths);
   }
 }
 
@@ -5251,6 +5308,11 @@ async function initJarvis() {
 // Notes de version affichees apres une mise a jour. La cle est le numero de
 // version, la valeur la liste des nouveautes a montrer.
 const CHANGELOG = {
+  "0.1.22": [
+    "Coller une image dans la CLI : Ctrl+V (ou clic droit > Coller) avec une capture d'écran ou une image copiée l'envoie directement à l'IA, sans l'enregistrer toi-même dans un dossier.",
+    "Fichiers copiés dans l'Explorateur : Ctrl+V colle leurs chemins dans la CLI.",
+    "Correctif : le glisser-déposer de fichiers dans le terminal fonctionne de nouveau, et accepte plusieurs fichiers à la fois."
+  ],
   "0.1.21": [
     "Un nouveau module se cache dans la barre d'outils… indice : il a un réacteur.",
     "Également proposé en option dans l'installateur Windows, et dans le menu Affichage."
@@ -5509,6 +5571,13 @@ async function init() {
     }
   }, GIT_POLL_MS);
   window.addEventListener("focus", clearVisibleAttention);
+  // Clic droit > Coller avec une image dans le presse-papiers.
+  window.launcher.onPasteText(({ id, text }) => {
+    const session = state.sessions.get(id);
+    if (session) {
+      pasteWithTrailingSpace(session, text);
+    }
+  });
   window.launcher.onNotifyActivate(({ sessionId }) => {
     if (state.sessions.has(sessionId)) {
       setActiveSession(sessionId);

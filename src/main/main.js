@@ -13,6 +13,7 @@ const conversation = require("./conversation");
 const claudeHistory = require("./claudeHistory");
 const gitInfo = require("./gitInfo");
 const jarvis = require("./jarvis");
+const clipboardImage = require("./clipboardImage");
 
 // Sous Linux, certaines distributions recentes (Ubuntu 24.04+) bloquent les
 // "user namespaces" non privilegies : le sandbox Chromium ne peut alors pas
@@ -999,6 +1000,7 @@ app.whenReady().then(() => {
     app.setAppUserModelId("fr.devopa.ia-cli-launcher");
   }
   pruneHistory();
+  clipboardImage.pruneOldImages();
   setAppMenu();
   createWindow();
   setupAutoUpdater();
@@ -1362,6 +1364,12 @@ app.whenReady().then(() => {
           const text = clipboard.readText();
           if (text) {
             session.pty.write(text);
+            return;
+          }
+          // Pas de texte : image du presse-papiers collee sous forme de chemin.
+          const imagePath = clipboardImage.saveClipboardImage();
+          if (imagePath) {
+            sendToRenderer("terminal:paste-text", { id, text: platform.quoteArg(imagePath) });
           }
         }
       }
@@ -1380,6 +1388,18 @@ app.whenReady().then(() => {
     const quotedPath = platform.quoteArg(filePath);
     session.pty.write(quotedPath);
     return true;
+  });
+
+  // Chemins de fichiers mis entre guillemets si besoin, prets a coller.
+  ipcMain.handle("system:quote-paths", (_event, paths) =>
+    (Array.isArray(paths) ? paths : []).filter(Boolean).map((file) => platform.quoteArg(file)).join(" ")
+  );
+
+  // Image du presse-papiers -> fichier PNG temporaire ; renvoie le texte a
+  // coller (chemin), ou null s'il n'y a pas d'image.
+  ipcMain.handle("clipboard:save-image", () => {
+    const imagePath = clipboardImage.saveClipboardImage();
+    return imagePath ? { path: imagePath, text: platform.quoteArg(imagePath) } : null;
   });
 });
 

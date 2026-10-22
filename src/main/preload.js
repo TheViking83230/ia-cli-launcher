@@ -1,4 +1,4 @@
-const { contextBridge, ipcRenderer } = require("electron");
+const { contextBridge, ipcRenderer, webUtils } = require("electron");
 
 contextBridge.exposeInMainWorld("launcher", {
   getAppState: () => ipcRenderer.invoke("app:get-state"),
@@ -56,6 +56,21 @@ contextBridge.exposeInMainWorld("launcher", {
     return () => ipcRenderer.off("notify:activate", listener);
   },
   pasteFilePath: (id, filePath) => ipcRenderer.invoke("terminal:paste-file-path", { id, filePath }),
+  // Electron 32+ : File.path n'existe plus, le chemin passe par webUtils.
+  getPathForFile: (file) => {
+    try {
+      return webUtils.getPathForFile(file) || "";
+    } catch {
+      return "";
+    }
+  },
+  quotePaths: (paths) => ipcRenderer.invoke("system:quote-paths", paths),
+  saveClipboardImage: () => ipcRenderer.invoke("clipboard:save-image"),
+  onPasteText: (handler) => {
+    const listener = (_event, payload) => handler(payload);
+    ipcRenderer.on("terminal:paste-text", listener);
+    return () => ipcRenderer.off("terminal:paste-text", listener);
+  },
   showTerminalContextMenu: (id, selectedText) => ipcRenderer.invoke("terminal:context-menu", { id, selectedText }),
   getSavedSessions: () => ipcRenderer.invoke("sessions:get-saved"),
   readScrollback: (id) => ipcRenderer.invoke("sessions:read-scrollback", id),
