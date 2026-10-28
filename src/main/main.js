@@ -422,10 +422,65 @@ function setAppMenu() {
 // Session de navigation dediee et persistante : la connexion a claude.ai est
 // gardee d'un lancement a l'autre.
 const DESIGN_PARTITION = "persist:claude-design";
-const LOGIN_POPUP_HOSTS = ["accounts.google.com", "appleid.apple.com"];
+const LOGIN_POPUP_HOSTS = ["appleid.apple.com"];
 
 function isClaudeUrl(url) {
   return /^https:\/\/claude\.ai(\/|$)/i.test(String(url || ""));
+}
+
+// Google refuse de connecter un compte depuis un navigateur integre a une
+// appli : ses pages de connexion voient un Firefox classique (en-tetes et
+// navigateur), dans une fenetre dediee qui partage la session des onglets.
+const GOOGLE_HOSTS = ["accounts.google.com", "accounts.youtube.com"];
+const FIREFOX_UA = {
+  win32: "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:131.0) Gecko/20100101 Firefox/131.0",
+  darwin: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:131.0) Gecko/20100101 Firefox/131.0",
+  linux: "Mozilla/5.0 (X11; Linux x86_64; rv:131.0) Gecko/20100101 Firefox/131.0"
+}[process.platform] || "Mozilla/5.0 (X11; Linux x86_64; rv:131.0) Gecko/20100101 Firefox/131.0";
+let googleLoginWindow = null;
+
+function urlHost(url) {
+  try {
+    return new URL(url).hostname;
+  } catch {
+    return "";
+  }
+}
+
+// Connexion Google a claude.ai : la page Google s'ouvre dans une fenetre
+// dediee ; des le retour sur claude.ai (connecte), la fenetre se ferme et les
+// onglets Design se rechargent.
+function openGoogleLogin(url) {
+  if (googleLoginWindow && !googleLoginWindow.isDestroyed()) {
+    googleLoginWindow.loadURL(url);
+    googleLoginWindow.focus();
+    return;
+  }
+  googleLoginWindow = new BrowserWindow({
+    parent: mainWindow,
+    width: 520,
+    height: 720,
+    autoHideMenuBar: true,
+    title: "Connexion à claude.ai",
+    backgroundColor: "#ffffff",
+    webPreferences: { partition: DESIGN_PARTITION, sandbox: true, contextIsolation: true, nodeIntegration: false }
+  });
+  const contents = googleLoginWindow.webContents;
+  contents.setUserAgent(FIREFOX_UA);
+  contents.setWindowOpenHandler(({ url: target }) => {
+    contents.loadURL(target);
+    return { action: "deny" };
+  });
+  contents.on("did-navigate", (_event, target) => {
+    if (isClaudeUrl(target) && !/\/login|\/magic-link|\/oauth/i.test(target)) {
+      googleLoginWindow.close();
+      sendToRenderer("design:logged-in", {});
+    }
+  });
+  googleLoginWindow.on("closed", () => {
+    googleLoginWindow = null;
+  });
+  googleLoginWindow.loadURL(url);
 }
 
 function setupDesignBrowsing() {
@@ -441,10 +496,34 @@ function setupDesignBrowsing() {
       .replace(/ ([A-Za-z][\w-]*)\/[\w.]+/g, (token, name) => (kept.has(name) ? token : ""))
       .replace(/\s+/g, " ")
   );
+  // En-tetes envoyes a Google : ceux d'un Firefox (sans indices Chromium).
+  designSession.webRequest.onBeforeSendHeaders({ urls: GOOGLE_HOSTS.map((host) => `https://${host}/*`) }, (details, callback) => {
+    const headers = { ...details.requestHeaders, "User-Agent": FIREFOX_UA };
+    for (const name of Object.keys(headers)) {
+      if (/^sec-ch-ua/i.test(name)) {
+        delete headers[name];
+      }
+    }
+    callback({ requestHeaders: headers });
+  });
+  ipcMain.handle("design:google-login", () => {
+    openGoogleLogin("https://claude.ai/login");
+    return true;
+  });
   app.on("web-contents-created", (_event, contents) => {
     if (contents.getType() !== "webview") {
       return;
     }
+    // « Continuer avec Google » dans un onglet : la suite se passe dans la
+    // fenetre de connexion (meme session, donc meme demande de connexion).
+    const toGoogle = (event, url) => {
+      if (GOOGLE_HOSTS.includes(urlHost(url))) {
+        event.preventDefault();
+        openGoogleLogin(url);
+      }
+    };
+    contents.on("will-navigate", toGoogle);
+    contents.on("will-redirect", toGoogle);
     // Liens claude.ai : dans l'onglet ; connexion Google/Apple : fenetre
     // dediee ; le reste : navigateur par defaut.
     contents.setWindowOpenHandler(({ url }) => {
@@ -452,10 +531,11 @@ function setupDesignBrowsing() {
         contents.loadURL(url);
         return { action: "deny" };
       }
-      let host = "";
-      try {
-        host = new URL(url).hostname;
-      } catch {}
+      const host = urlHost(url);
+      if (GOOGLE_HOSTS.includes(host)) {
+        openGoogleLogin(url);
+        return { action: "deny" };
+      }
       if (LOGIN_POPUP_HOSTS.includes(host)) {
         return { action: "allow", overrideBrowserWindowOptions: { autoHideMenuBar: true, width: 520, height: 720 } };
       }

@@ -3903,3 +3903,13 @@ body.jarvis .tool-menu-list .tool-item {
 body.jarvis .tool-menu-list .tool-item:hover:not(:disabled) {
   background: rgba(56, 232, 255, 0.08);
 }
+
+.design-google {
+  min-height: 34px;
+  padding: 0 12px;
+  white-space: nowrap;
+}
+
+.design-google.hidden {
+  display: none;
+}

@@ -69,6 +69,12 @@ contextBridge.exposeInMainWorld("launcher", {
   getLastReply: (id) => ipcRenderer.invoke("terminal:last-reply", id),
   getActivity: (ids) => ipcRenderer.invoke("terminal:activity", ids),
   getArtifacts: (ids) => ipcRenderer.invoke("terminal:artifacts", ids),
+  designGoogleLogin: () => ipcRenderer.invoke("design:google-login"),
+  onDesignLoggedIn: (handler) => {
+    const listener = () => handler();
+    ipcRenderer.on("design:logged-in", listener);
+    return () => ipcRenderer.off("design:logged-in", listener);
+  },
   getSystemStats: () => ipcRenderer.invoke("system:stats"),
   onJarvisMenu: (handler) => {
     const listener = () => handler();

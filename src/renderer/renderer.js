@@ -7363,6 +7363,7 @@ function openDesignTab({ url = "", home = "design", cwd = "", linkedSessionId = 
       <select class="design-target" title="Session IA qui recevra le design"></select>
       <button type="button" class="primary-button design-send" title="Coller le lien du design dans la session choisie"><i data-lucide="send"></i> Envoyer à l'IA</button>
       <button type="button" class="icon-button design-external" title="Ouvrir dans le navigateur"><i data-lucide="external-link"></i></button>
+      <button type="button" class="ghost-button design-google hidden" title="Se connecter à claude.ai avec ton compte Google"><i data-lucide="log-in"></i> Connexion Google</button>
     </div>`;
   const webview = document.createElement("webview");
   webview.className = "design-view";
@@ -7372,7 +7373,7 @@ function openDesignTab({ url = "", home = "design", cwd = "", linkedSessionId = 
   container.appendChild(webview);
   elements.terminalHost.appendChild(container);
 
-  const session = { id, type: "design", title: page.title, accent: home === "artifacts" ? "#6aa7ff" : "#d97757", container, webview, cwd, linkedSessionId, url: webview.src };
+  const session = { id, type: "design", home, title: page.title, accent: home === "artifacts" ? "#6aa7ff" : "#d97757", container, webview, cwd, linkedSessionId, url: webview.src };
   const $ = (selector) => container.querySelector(selector);
   const target = $(".design-target");
 
@@ -7442,6 +7443,11 @@ function openDesignTab({ url = "", home = "design", cwd = "", linkedSessionId = 
     setActiveSession(destination.id);
     flashStatus("Lien du design collé : écris ta consigne puis Entrée.");
   });
+  // Page de connexion claude.ai : bouton de connexion Google en un clic.
+  webview.addEventListener("did-navigate", () => {
+    $(".design-google").classList.toggle("hidden", !/claude\.ai\/(login|logout)/.test(designUrl(session)));
+  });
+  $(".design-google").addEventListener("click", () => window.launcher.designGoogleLogin());
   webview.addEventListener("did-navigate", onNavigate);
   webview.addEventListener("did-navigate-in-page", onNavigate);
   webview.addEventListener("page-title-updated", (event) => {
@@ -7525,6 +7531,10 @@ async function pollArtifacts() {
 // Notes de version affichees apres une mise a jour. La cle est le numero de
 // version, la valeur la liste des nouveautes a montrer.
 const CHANGELOG = {
+  "0.1.33": [
+    "Connexion Google à claude.ai dans les onglets Claude Design et Artifacts : un bouton « Connexion Google » ouvre une fenêtre de connexion dédiée, qui se ferme toute seule une fois connecté.",
+    "Après la connexion, les onglets Design et Artifacts se rechargent automatiquement, déjà connectés."
+  ],
   "0.1.32": [
     "Barre d'outils rangée en quatre menus : Créer, Bibliothèque, Affichage et Réglages (raccourcis clavier affichés).",
     "Claude Design et Artifacts s'ouvrent dans un onglet du Launcher, rattachés au projet de l'onglet actif (connexion à claude.ai gardée).",
@@ -7855,6 +7865,17 @@ async function init() {
       pollArtifacts();
     }
   }, ARTIFACT_POLL_MS);
+  // Connecte a claude.ai (Google) : les onglets Design affichent la session.
+  window.launcher.onDesignLoggedIn(() => {
+    for (const tab of designTabs()) {
+      if (/claude\.ai\/(login|logout)/.test(designUrl(tab))) {
+        tab.webview.loadURL(CLAUDE_PAGES[tab.home]?.url || CLAUDE_PAGES.design.url);
+      } else {
+        tab.webview.reload();
+      }
+    }
+    flashStatus("Connecté à claude.ai : Claude Design et Artifacts sont prêts.");
+  });
   // Clic droit > Coller sans texte : fichiers copies ou image.
   window.launcher.onPasteAttachments(({ id }) => {
     const session = state.sessions.get(id);
