@@ -68,6 +68,7 @@ contextBridge.exposeInMainWorld("launcher", {
   },
   getLastReply: (id) => ipcRenderer.invoke("terminal:last-reply", id),
   getActivity: (ids) => ipcRenderer.invoke("terminal:activity", ids),
+  getArtifacts: (ids) => ipcRenderer.invoke("terminal:artifacts", ids),
   getSystemStats: () => ipcRenderer.invoke("system:stats"),
   onJarvisMenu: (handler) => {
     const listener = () => handler();
@@ -90,6 +91,13 @@ contextBridge.exposeInMainWorld("launcher", {
   },
   quotePaths: (paths) => ipcRenderer.invoke("system:quote-paths", paths),
   saveClipboardImage: () => ipcRenderer.invoke("clipboard:save-image"),
+  readClipboardFiles: () => ipcRenderer.invoke("clipboard:read-files"),
+  openPath: (target) => ipcRenderer.invoke("system:open-path", target),
+  onPasteAttachments: (handler) => {
+    const listener = (_event, payload) => handler(payload);
+    ipcRenderer.on("terminal:paste-attachments", listener);
+    return () => ipcRenderer.off("terminal:paste-attachments", listener);
+  },
   onPasteText: (handler) => {
     const listener = (_event, payload) => handler(payload);
     ipcRenderer.on("terminal:paste-text", listener);

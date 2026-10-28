@@ -184,6 +184,7 @@
                 <option value="">Relais →</option>
               </select>
               <button id="gitChip" class="git-chip hidden" type="button" title="Changements Git du dossier de l'onglet"></button>
+              <button id="designChip" class="git-chip design-chip hidden" type="button" title="Designs claude.ai du projet"></button>
               <div id="usageBar" class="usage-bar empty" aria-live="polite"></div>
             </div>
           </div>
@@ -191,33 +192,61 @@
             <button id="toolbarToggleButton" class="header-tools-toggle" type="button" title="Masquer la barre d'outils">
               <i data-lucide="chevrons-right"></i>
             </button>
-            <button id="splitButton" class="icon-button" type="button" title="Vue partagée (deux onglets côte à côte)">
-              <i data-lucide="columns-2"></i>
-            </button>
-            <button id="mirrorButton" class="icon-button" type="button" title="Saisie synchronisée (taper dans les deux panes à la fois)" disabled>
-              <i data-lucide="link"></i>
-            </button>
-            <button id="pipelineButton" class="icon-button" type="button" title="Pipeline IA (enchaîner plusieurs IA)">
-              <i data-lucide="workflow"></i>
-            </button>
-            <button id="promptsButton" class="icon-button" type="button" title="Bibliothèque de prompts (Ctrl+Maj+L)">
-              <i data-lucide="library"></i>
-            </button>
-            <button id="conversationsButton" class="icon-button" type="button" title="Conversations Claude (Ctrl+Maj+O)">
-              <i data-lucide="messages-square"></i>
-            </button>
-            <button id="historyButton" class="icon-button" type="button" title="Historique global">
-              <i data-lucide="history"></i>
-            </button>
-            <button id="shortcutsButton" class="icon-button" type="button" title="Raccourcis clavier (F1)">
-              <i data-lucide="keyboard"></i>
-            </button>
-            <button id="syncButton" class="icon-button" type="button" title="Synchronisation des données">
-              <i data-lucide="refresh-cw"></i>
-            </button>
-            <button id="toggleSidebarButton" class="icon-button" type="button" title="Masquer le menu">
-              <i data-lucide="panel-left-close"></i>
-            </button>
+            <div class="tool-menus">
+              <div class="tool-menu" data-menu="create">
+                <button class="tool-menu-trigger" type="button"><i data-lucide="sparkles"></i><span>Créer</span><i data-lucide="chevron-down"></i></button>
+                <div class="tool-menu-list">
+                  <button id="pipelineButton" class="icon-button tool-item" data-label="Pipeline IA" type="button" title="Pipeline IA (enchaîner plusieurs IA)">
+                    <i data-lucide="workflow"></i>
+                  </button>
+                  <button id="designButton" class="icon-button tool-item" data-label="Claude Design" type="button" title="Claude Design rattaché au projet de l'onglet">
+                    <i data-lucide="palette"></i>
+                  </button>
+                  <button id="artifactsButton" class="icon-button tool-item" data-label="Artifacts" type="button" title="Artifacts claude.ai rattachés au projet de l'onglet">
+                    <i data-lucide="app-window"></i>
+                  </button>
+                </div>
+              </div>
+              <div class="tool-menu" data-menu="library">
+                <button class="tool-menu-trigger" type="button"><i data-lucide="library"></i><span>Bibliothèque</span><i data-lucide="chevron-down"></i></button>
+                <div class="tool-menu-list">
+                  <button id="promptsButton" class="icon-button tool-item" data-label="Prompts" type="button" title="Bibliothèque de prompts (Ctrl+Maj+L)">
+                    <i data-lucide="library"></i><kbd class="tool-hint">Ctrl+Maj+L</kbd>
+                  </button>
+                  <button id="conversationsButton" class="icon-button tool-item" data-label="Conversations Claude" type="button" title="Conversations Claude (Ctrl+Maj+O)">
+                    <i data-lucide="messages-square"></i><kbd class="tool-hint">Ctrl+Maj+O</kbd>
+                  </button>
+                  <button id="historyButton" class="icon-button tool-item" data-label="Historique" type="button" title="Historique global">
+                    <i data-lucide="history"></i>
+                  </button>
+                </div>
+              </div>
+              <div class="tool-menu" data-menu="view">
+                <button class="tool-menu-trigger" type="button"><i data-lucide="layout-panel-left"></i><span>Affichage</span><i data-lucide="chevron-down"></i></button>
+                <div class="tool-menu-list">
+                  <button id="splitButton" class="icon-button tool-item" data-label="Vue partagée" type="button" title="Vue partagée (deux onglets côte à côte)">
+                    <i data-lucide="columns-2"></i>
+                  </button>
+                  <button id="mirrorButton" class="icon-button tool-item" data-label="Saisie synchronisée" type="button" title="Saisie synchronisée (taper dans les deux panes à la fois)" disabled>
+                    <i data-lucide="link"></i>
+                  </button>
+                  <button id="toggleSidebarButton" class="icon-button tool-item" data-label="Masquer le menu" type="button" title="Masquer le menu">
+                    <i data-lucide="panel-left-close"></i>
+                  </button>
+                </div>
+              </div>
+              <div class="tool-menu" data-menu="settings">
+                <button class="tool-menu-trigger" type="button"><i data-lucide="settings"></i><span>Réglages</span><i data-lucide="chevron-down"></i></button>
+                <div class="tool-menu-list">
+                  <button id="shortcutsButton" class="icon-button tool-item" data-label="Raccourcis clavier" type="button" title="Raccourcis clavier (F1)">
+                    <i data-lucide="keyboard"></i><kbd class="tool-hint">F1</kbd>
+                  </button>
+                  <button id="syncButton" class="icon-button tool-item" data-label="Synchronisation" type="button" title="Synchronisation des données">
+                    <i data-lucide="refresh-cw"></i>
+                  </button>
+                </div>
+              </div>
+            </div>
             <button id="jarvisButton" class="icon-button jarvis-button" type="button" title="JARVIS">
               <svg class="arc-reactor" viewBox="0 0 32 32" aria-hidden="true">
                 <circle class="arc-ring" cx="16" cy="16" r="13" />

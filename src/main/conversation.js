@@ -587,9 +587,77 @@ async function getActivity({ profileId, pid, cwd, startedAt }, limit = 8) {
   return [];
 }
 
+// --- Designs publies (artifacts claude.ai) ----------------------------------
+// Liens d'artifacts cites par l'IA (publication, republication) ; les messages
+// tapes par l'utilisateur sont ignores. Resultat : [{ url, at }], at = dernier
+// passage du lien dans la conversation (une republication l'avance).
+const ARTIFACT_URL = /https:\/\/claude\.ai\/(?:code\/)?artifact\/[A-Za-z0-9_-]+/g;
+const artifactCache = new Map();
+
+function isTypedByUser(entry) {
+  if (entry.type === "user") {
+    const content = entry.message?.content;
+    return !(Array.isArray(content) && content.some((block) => block.type === "tool_result"));
+  }
+  const payload = entry.payload || {};
+  return payload.role === "user" || payload.type === "user_message";
+}
+
+function findArtifacts(file) {
+  let stat;
+  try {
+    stat = fs.statSync(file);
+  } catch {
+    return [];
+  }
+  const cached = artifactCache.get(file);
+  if (cached && cached.mtime === stat.mtimeMs && cached.size === stat.size) {
+    return cached.items;
+  }
+  const found = new Map();
+  for (const line of readTail(file, 4 * 1024 * 1024).split("\n")) {
+    const urls = line.includes("claude.ai/") && line.match(ARTIFACT_URL);
+    if (!urls) {
+      continue;
+    }
+    let entry;
+    try {
+      entry = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (isTypedByUser(entry)) {
+      continue;
+    }
+    const at = Date.parse(entry.timestamp) || 0;
+    for (const url of urls) {
+      found.set(url, Math.max(found.get(url) || 0, at));
+    }
+  }
+  const items = [...found].map(([url, at]) => ({ url, at }));
+  artifactCache.set(file, { mtime: stat.mtimeMs, size: stat.size, items });
+  return items;
+}
+
+async function getArtifacts({ profileId, pid, cwd, startedAt }) {
+  try {
+    if (profileId === "claude" && pid) {
+      const live = await claudeLive(Number(pid), cwd);
+      const file = live.conversationId && claudeConversationFile(live.conversationId, cwd);
+      return file ? findArtifacts(file) : [];
+    }
+    if (profileId === "codex" && pid && cwd && startedAt) {
+      codexLive(Number(pid), cwd, Number(startedAt));
+      const file = liveCache.get(Number(pid))?.file;
+      return file ? findArtifacts(file) : [];
+    }
+  } catch {}
+  return [];
+}
+
 // Oubli du cache d'un terminal ferme.
 function forgetLive(pid) {
   liveCache.delete(Number(pid));
 }
 
-module.exports = { getConversationInfo, getLiveStatus, getLastReply, getActivity, forgetLive };
+module.exports = { getConversationInfo, getLiveStatus, getLastReply, getActivity, getArtifacts, forgetLive };

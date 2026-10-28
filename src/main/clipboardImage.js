@@ -3,6 +3,7 @@
 // temporaire, puis son chemin est colle dans le terminal. Claude Code, Codex,
 // etc. reconnaissent un chemin d'image colle et l'analysent.
 const { clipboard } = require("electron");
+const { execFile } = require("node:child_process");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
@@ -39,4 +40,38 @@ function saveClipboardImage() {
   return file;
 }
 
-module.exports = { pruneOldImages, saveClipboardImage };
+// Fichiers copies dans l'explorateur de fichiers : liste de chemins (vide sinon).
+// Windows n'expose a Electron que le premier fichier (FileNameW) : la liste
+// complete est lue par PowerShell quand il y en a un.
+function readClipboardFiles() {
+  if (process.platform === "win32") {
+    const first = clipboard.readBuffer("FileNameW").toString("utf16le").replace(/\0+$/, "");
+    if (!first) {
+      return Promise.resolve([]);
+    }
+    const script =
+      "[Console]::OutputEncoding = [Text.Encoding]::UTF8; Get-Clipboard -Format FileDropList | ForEach-Object { $_.FullName }";
+    return new Promise((resolve) => {
+      execFile("powershell.exe", ["-NoProfile", "-NonInteractive", "-STA", "-Command", script], { windowsHide: true, timeout: 5000 }, (error, stdout) => {
+        const all = error ? [] : String(stdout).split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+        resolve(all.includes(first) ? all : [first]);
+      });
+    });
+  }
+  // Linux (GNOME, KDE...) et macOS : liste d'URL file://.
+  const raw = [clipboard.read("x-special/gnome-copied-files"), clipboard.read("text/uri-list"), clipboard.read("public.file-url")].join("\n");
+  const paths = [];
+  for (const line of raw.split(/\r?\n/)) {
+    if (line.startsWith("file://")) {
+      try {
+        const file = decodeURIComponent(new URL(line.trim()).pathname);
+        if (fs.existsSync(file) && !paths.includes(file)) {
+          paths.push(file);
+        }
+      } catch {}
+    }
+  }
+  return Promise.resolve(paths);
+}
+
+module.exports = { pruneOldImages, saveClipboardImage, readClipboardFiles };

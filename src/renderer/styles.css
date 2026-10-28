@@ -475,13 +475,191 @@ select:focus {
 }
 
 /* Barre d'outils masquee : seuls le bouton de bascule et JARVIS restent. */
-.toolbar.tools-hidden > .icon-button:not(#jarvisButton) {
+.toolbar.tools-hidden > .icon-button:not(#jarvisButton),
+.toolbar.tools-hidden > .tool-menus {
   display: none;
 }
 
-/* Menu lateral replie : son bouton reste accessible pour le rouvrir. */
-.shell.sidebar-collapsed .toolbar.tools-hidden > #toggleSidebarButton {
+/* Menu lateral replie : le menu Affichage reste accessible pour le rouvrir. */
+.shell.sidebar-collapsed .toolbar.tools-hidden > .tool-menus {
+  display: flex;
+}
+
+.shell.sidebar-collapsed .toolbar.tools-hidden .tool-menu:not([data-menu="view"]) {
+  display: none;
+}
+
+/* Menus par theme (Creer, Bibliotheque, Affichage, Reglages) : une seule
+   barre segmentee, chaque segment ouvre sa liste. */
+.tool-menus {
+  display: flex;
+  align-items: stretch;
+  height: 40px;
+  border: 1px solid #343c49;
+  border-radius: 8px;
+  background: #10131a;
+}
+
+.tool-menu {
+  position: relative;
+  display: flex;
+}
+
+.tool-menu + .tool-menu {
+  border-left: 1px solid #262d38;
+}
+
+.tool-menu-trigger {
   display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 0 11px 0 13px;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+  transition: color 0.15s ease, background 0.15s ease;
+}
+
+.tool-menu:first-child .tool-menu-trigger {
+  border-radius: 7px 0 0 7px;
+}
+
+.tool-menu:last-child .tool-menu-trigger {
+  border-radius: 0 7px 7px 0;
+}
+
+.tool-menu-trigger:hover,
+.tool-menu.open .tool-menu-trigger {
+  background: #1d222b;
+  color: var(--text);
+}
+
+.tool-menu-trigger svg {
+  width: 16px;
+  height: 16px;
+}
+
+.tool-menu-trigger svg:first-child {
+  color: var(--accent);
+}
+
+.tool-menu-trigger svg:last-child {
+  width: 13px;
+  height: 13px;
+  color: var(--soft);
+  transition: transform 0.15s ease;
+}
+
+.tool-menu.open .tool-menu-trigger svg:last-child {
+  transform: rotate(180deg);
+}
+
+.tool-menu-list {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 60;
+  display: none;
+  min-width: 250px;
+  padding: 6px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--panel-strong);
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.5);
+  animation: tool-menu-in 0.12s ease-out;
+}
+
+@keyframes tool-menu-in {
+  from { opacity: 0; transform: translateY(-4px); }
+}
+
+.tool-menu.open .tool-menu-list {
+  display: grid;
+  gap: 2px;
+}
+
+.tool-menu-list .tool-item {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 11px;
+  width: 100%;
+  min-height: 38px;
+  height: 38px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text);
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.tool-menu-list .tool-item svg {
+  order: 0;
+  color: var(--muted);
+}
+
+.tool-menu-list .tool-item::after {
+  order: 1;
+  content: attr(data-label);
+}
+
+.tool-hint {
+  order: 2;
+  margin-left: auto;
+  padding: 2px 6px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  color: var(--soft);
+  font-family: inherit;
+  font-size: 11px;
+}
+
+.tool-menu-list .tool-item:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.tool-menu-list .tool-item:hover:not(:disabled) svg {
+  color: var(--accent);
+}
+
+.tool-menu-list .tool-item.toggle-on {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  color: var(--accent);
+}
+
+.tool-menu-list .tool-item.toggle-on svg {
+  color: var(--accent);
+}
+
+.tool-menu-list .tool-item:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+/* Mode JARVIS : barre et menus aux couleurs du HUD. */
+body.jarvis .tool-menus {
+  border-color: rgba(56, 232, 255, 0.22);
+  background: rgba(3, 14, 22, 0.9);
+}
+
+body.jarvis .tool-menu + .tool-menu {
+  border-left-color: rgba(56, 232, 255, 0.14);
+}
+
+body.jarvis .tool-menu-trigger svg:first-child,
+body.jarvis .tool-menu-list .tool-item:hover:not(:disabled) svg {
+  color: #38e8ff;
+}
+
+body.jarvis .tool-menu-list {
+  border-color: rgba(56, 232, 255, 0.3);
+  background: rgba(3, 14, 22, 0.97);
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.55), 0 0 18px rgba(56, 232, 255, 0.12);
 }
 
 /* Sections repliables du menu lateral (clic sur le titre). */
@@ -3521,4 +3699,207 @@ body.jarvis .changelog-dialog {
   margin: 8px 0 0;
   font-size: 12px;
   color: var(--muted, #8aa);
+}
+
+/* --- Onglets « Design » (claude.ai) ---------------------------------------- */
+.terminal-pane.design-pane-host {
+  padding: 0;
+  gap: 0;
+}
+
+.design-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--line);
+  background: var(--panel);
+}
+
+.design-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.design-project {
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.design-target {
+  max-width: 240px;
+  height: 34px;
+}
+
+.design-send {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+.design-send svg {
+  width: 15px;
+  height: 15px;
+}
+
+.design-view {
+  flex: 1 1 auto;
+  width: 100%;
+  min-height: 0;
+  border: 0;
+  background: #fff;
+}
+
+.design-chip.fresh {
+  border-color: #d97757;
+  color: #f0a585;
+  animation: design-fresh 1.4s ease-in-out infinite;
+}
+
+@keyframes design-fresh {
+  50% { box-shadow: 0 0 0 3px rgba(217, 119, 87, 0.25); }
+}
+
+.design-menu {
+  position: fixed;
+  z-index: 60;
+  display: grid;
+  width: 330px;
+  max-height: 60vh;
+  overflow-y: auto;
+  padding: 6px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel-strong);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
+}
+
+.design-menu button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text);
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.design-menu button:hover {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.design-menu button span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.design-menu svg {
+  width: 15px;
+  height: 15px;
+  flex-shrink: 0;
+  color: #d97757;
+}
+
+.design-menu-label {
+  padding: 8px 10px 4px;
+  color: var(--muted);
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+/* --- Pieces jointes collees (apercu jusqu'a l'envoi) ------------------------ */
+.attach-strip {
+  position: absolute;
+  top: 16px;
+  right: 22px;
+  z-index: 5;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 6px;
+  max-width: 60%;
+  padding: 6px 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(17, 19, 24, 0.92);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+}
+
+.attach-head {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.attach-head svg,
+.attach-chip svg {
+  width: 14px;
+  height: 14px;
+}
+
+.attach-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 220px;
+  height: 30px;
+  padding: 0 4px 0 6px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--panel-strong);
+  color: var(--text);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.attach-chip img {
+  width: 22px;
+  height: 22px;
+  border-radius: 3px;
+  object-fit: cover;
+}
+
+.attach-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.attach-hide {
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.attach-hide:hover {
+  color: var(--text);
+}
+
+body.jarvis .tool-menu-list .tool-item {
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+body.jarvis .tool-menu-list .tool-item:hover:not(:disabled) {
+  background: rgba(56, 232, 255, 0.08);
 }

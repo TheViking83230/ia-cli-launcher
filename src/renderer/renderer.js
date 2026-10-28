@@ -49,6 +49,9 @@ const elements = {
   relaySelect: document.getElementById("relaySelect"),
   restartAiButton: document.getElementById("restartAiButton"),
   gitChip: document.getElementById("gitChip"),
+  designChip: document.getElementById("designChip"),
+  designButton: document.getElementById("designButton"),
+  artifactsButton: document.getElementById("artifactsButton"),
   promptsButton: document.getElementById("promptsButton"),
   conversationsButton: document.getElementById("conversationsButton"),
   jarvisButton: document.getElementById("jarvisButton"),
@@ -183,6 +186,7 @@ function updateFolder(path) {
 function setSidebarCollapsed(collapsed) {
   elements.appShell.classList.toggle("sidebar-collapsed", collapsed);
   elements.toggleSidebarButton.title = collapsed ? "Afficher le menu" : "Masquer le menu";
+  elements.toggleSidebarButton.dataset.label = elements.toggleSidebarButton.title;
   elements.toggleSidebarButton.innerHTML = collapsed
     ? '<i data-lucide="panel-left-open"></i>'
     : '<i data-lucide="panel-left-close"></i>';
@@ -658,6 +662,7 @@ function layoutPanes() {
 function updateSessionHeader() {
   const active = state.sessions.get(state.activeSessionId);
   const isPipeline = active?.type === "pipeline";
+  const isDesign = active?.type === "design";
   elements.emptyState.classList.toggle("hidden", state.sessions.size > 0);
   elements.activeTitleInput.disabled = !active;
   elements.renameActiveTabButton.disabled = !active;
@@ -665,14 +670,15 @@ function updateSessionHeader() {
   elements.restartAiButton.disabled = !active || isPipeline || active.spec?.kind !== "profile";
   updateRestartButton();
   refreshGitChip();
+  refreshDesignChip();
   if (elements.relaySelect) {
     // Le relais ne s'applique qu'aux onglets terminaux.
-    elements.relaySelect.disabled = !active || isPipeline;
+    elements.relaySelect.disabled = !active || isPipeline || isDesign;
     elements.relaySelect.value = "";
   }
   elements.activeTitleInput.value = active?.title || "Aucun onglet";
   elements.sessionMeta.textContent = active
-    ? isPipeline ? "Pipeline IA" : `${active.command} | ${active.cwd}`
+    ? isPipeline ? "Pipeline IA" : isDesign ? `Design claude.ai | ${active.cwd || "aucun projet"}` : `${active.command} | ${active.cwd}`
     : "Pret";
   refreshUsageBar();
 }
@@ -1436,6 +1442,7 @@ function pasteToSession(session, text, submit) {
   window.launcher.writeTerminal(session.id, bracketed ? `\x1b[200~${text}\x1b[201~` : text.replace(/\s*\n\s*/g, " "));
   if (submit) {
     window.setTimeout(() => window.launcher.writeTerminal(session.id, "\r"), 250);
+    clearAttachments(session);
   }
 }
 
@@ -1446,6 +1453,7 @@ async function pastePathsToSession(session, paths) {
   const text = await window.launcher.quotePaths(paths);
   if (text) {
     pasteWithTrailingSpace(session, text);
+    addAttachments(session, paths);
     flashStatus(paths.length > 1 ? `${paths.length} fichiers collés` : `Fichier collé : ${paths[0]}`);
   }
 }
@@ -1465,8 +1473,95 @@ async function pasteClipboardImage(session) {
     return false;
   }
   pasteWithTrailingSpace(session, saved.text);
+  addAttachments(session, [saved.path]);
   flashStatus("Image collée : l'IA va l'analyser avec ton message");
   return true;
+}
+
+// Presse-papiers sans texte : fichiers copies dans l'Explorateur, sinon image.
+async function pasteClipboardAttachments(session) {
+  const paths = await window.launcher.readClipboardFiles();
+  if (paths.length) {
+    await pastePathsToSession(session, paths);
+    return true;
+  }
+  return pasteClipboardImage(session);
+}
+
+// Apercu des pieces jointes (nom, miniature) en haut a droite du terminal,
+// jusqu'a l'envoi du message.
+const IMAGE_FILE = /\.(png|jpe?g|gif|webp|bmp|svg)$/i;
+
+function fileUrl(filePath) {
+  const parts = String(filePath).replace(/\\/g, "/").split("/");
+  const encoded = parts.map((part, index) => (index === 0 && /^[A-Za-z]:$/.test(part) ? part : encodeURIComponent(part))).join("/");
+  return encoded.startsWith("/") ? `file://${encoded}` : `file:///${encoded}`;
+}
+
+function addAttachments(session, paths) {
+  const known = new Set((session.attachments || []).map((item) => item.path));
+  session.attachments = [
+    ...(session.attachments || []),
+    ...paths.filter((item) => !known.has(item)).map((item) => ({ path: item, name: item.split(/[\\/]/).pop() }))
+  ];
+  renderAttachments(session);
+}
+
+function clearAttachments(session) {
+  if (session?.attachments?.length) {
+    session.attachments = [];
+    renderAttachments(session);
+  }
+}
+
+function renderAttachments(session) {
+  let strip = session.container.querySelector(".attach-strip");
+  if (!session.attachments?.length) {
+    strip?.remove();
+    return;
+  }
+  if (!strip) {
+    strip = document.createElement("div");
+    strip.className = "attach-strip";
+    session.container.appendChild(strip);
+  }
+  strip.innerHTML = "";
+  const head = document.createElement("span");
+  head.className = "attach-head";
+  head.innerHTML = '<i data-lucide="paperclip"></i>';
+  head.append(session.attachments.length > 1 ? `${session.attachments.length} pièces jointes` : "Pièce jointe");
+  head.title = "Partiront avec ton prochain message";
+  strip.appendChild(head);
+  for (const item of session.attachments) {
+    const chip = document.createElement("span");
+    chip.className = "attach-chip";
+    chip.title = `${item.path}\nClic : ouvrir le fichier`;
+    if (IMAGE_FILE.test(item.name)) {
+      const thumb = document.createElement("img");
+      thumb.src = fileUrl(item.path);
+      thumb.alt = "";
+      chip.appendChild(thumb);
+    } else {
+      chip.insertAdjacentHTML("beforeend", '<i data-lucide="file-text"></i>');
+    }
+    const name = document.createElement("span");
+    name.className = "attach-name";
+    name.textContent = item.name;
+    const hide = document.createElement("button");
+    hide.type = "button";
+    hide.className = "attach-hide";
+    hide.title = "Retirer de l'aperçu (le chemin reste dans le message)";
+    hide.textContent = "×";
+    hide.addEventListener("click", (event) => {
+      event.stopPropagation();
+      session.attachments = session.attachments.filter((other) => other !== item);
+      renderAttachments(session);
+    });
+    chip.append(name, hide);
+    chip.addEventListener("click", () => window.launcher.openPath(item.path));
+    strip.appendChild(chip);
+  }
+  createIcons();
 }
 
 // Ctrl+V dans un terminal : le texte reste gere par xterm ; une image ou des
@@ -1478,16 +1573,13 @@ function handleTerminalPaste(session, event) {
   }
   const files = Array.from(data.files || []);
   const paths = files.map((file) => window.launcher.getPathForFile(file)).filter(Boolean);
-  const hasImage = Array.from(data.items || []).some((item) => item.type.startsWith("image/"));
-  if (!paths.length && !hasImage) {
-    return;
-  }
   event.preventDefault();
   event.stopPropagation();
   if (paths.length) {
     pastePathsToSession(session, paths);
   } else {
-    pasteClipboardImage(session);
+    // Fichiers de l'Explorateur (absents de l'evenement sous Windows) ou image.
+    pasteClipboardAttachments(session);
   }
 }
 
@@ -1841,7 +1933,7 @@ function createTab(session) {
 }
 
 async function persistSessionTitle(session) {
-  if (!session) {
+  if (session?.type !== "terminal") {
     return;
   }
 
@@ -2014,6 +2106,10 @@ async function openTerminalSession({ title, accent, starter, replayText, spec })
     if (chordToActionId(eventToChord(event))) {
       return false;
     }
+    // Message envoye : les pieces jointes affichees sont parties avec.
+    if (event.key === "Enter" && !event.shiftKey && !event.altKey && !event.ctrlKey) {
+      clearAttachments(session);
+    }
     if (event.ctrlKey && event.shiftKey && event.key === "C") {
       const selected = terminal.getSelection();
       if (selected) {
@@ -2026,7 +2122,7 @@ async function openTerminalSession({ title, accent, starter, replayText, spec })
         if (text) {
           window.launcher.writeTerminal(session.id, text);
         } else {
-          pasteClipboardImage(session);
+          pasteClipboardAttachments(session);
         }
       });
       return false;
@@ -4606,6 +4702,24 @@ function bindEvents() {
   });
   elements.managePersonasButton.addEventListener("click", openPersonasModal);
   elements.gitChip.addEventListener("click", openGitChanges);
+  elements.designChip.addEventListener("click", (event) => {
+    event.stopPropagation();
+    const session = gitSessionOf(state.sessions.get(state.activeSessionId));
+    if (session) {
+      session.freshDesign = false;
+      elements.designChip.classList.remove("fresh");
+      openDesignMenu(elements.designChip, session.cwd, session.id);
+    }
+  });
+  // Claude Design et Artifacts : onglet rattache au projet de l'onglet actif.
+  const openClaudePage = (home) => {
+    const active = state.sessions.get(state.activeSessionId);
+    const session = gitSessionOf(active);
+    openDesignTab({ home, cwd: session?.cwd || active?.cwd || "", linkedSessionId: session?.id });
+  };
+  elements.designButton.addEventListener("click", () => openClaudePage("design"));
+  elements.artifactsButton.addEventListener("click", () => openClaudePage("artifacts"));
+  setupToolMenus();
   elements.promptsButton.addEventListener("click", openPrompts);
   elements.jarvisButton.addEventListener("click", openJarvis);
   elements.conversationsButton.addEventListener("click", openConversations);
@@ -7103,9 +7217,320 @@ async function initJarvis() {
   }
 }
 
+// --- Designs claude.ai (artifacts) ------------------------------------------
+// Un onglet « Design » affiche claude.ai (connexion gardee). Son design peut
+// etre envoye a une session IA (lien + consigne) ; les designs que l'IA publie
+// sont detectes dans sa conversation, rattaches au projet (dossier de
+// l'onglet) et l'onglet Design ouvert se recharge a chaque republication.
+const CLAUDE_PAGES = {
+  design: { url: "https://claude.ai/design", title: "Claude Design", icon: "palette" },
+  artifacts: { url: "https://claude.ai/code/artifacts", title: "Artifacts", icon: "app-window" }
+};
+// Artifact publie, ou projet Claude Design (claude.ai/design/...).
+const ARTIFACT_URL_RE = /^https:\/\/claude\.ai\/(?:(?:code\/)?artifact\/[A-Za-z0-9_-]+|design\/[^?#\s]+)/;
+const ARTIFACT_POLL_MS = 5000;
+
+function projectKey(cwd) {
+  const key = String(cwd || "").replace(/[\\/]+$/, "");
+  return /^[A-Za-z]:/.test(key) ? key.toLowerCase() : key;
+}
+
+function projectName(cwd) {
+  return String(cwd || "").split(/[\\/]/).filter(Boolean).pop() || "";
+}
+
+function projectDesigns(cwd) {
+  return state.config.designs?.[projectKey(cwd)] || [];
+}
+
+function artifactUrl(url) {
+  return String(url || "").match(ARTIFACT_URL_RE)?.[0] || "";
+}
+
+// Ajoute (ou remonte en tete) un design dans la liste du projet.
+async function rememberDesign(cwd, url, title = "") {
+  const clean = artifactUrl(url);
+  if (!cwd || !clean) {
+    return;
+  }
+  const key = projectKey(cwd);
+  const list = state.config.designs?.[key] || [];
+  const previous = list.find((design) => design.url === clean);
+  const name = title || previous?.title || "";
+  if (previous && list[0] === previous && previous.title === name) {
+    return;
+  }
+  const designs = { ...(state.config.designs || {}) };
+  designs[key] = [{ url: clean, title: name, at: Date.now() }, ...list.filter((design) => design !== previous)].slice(0, 50);
+  state.config.designs = designs;
+  state.config = await window.launcher.saveConfig(state.config);
+  refreshDesignChip();
+}
+
+// URL affichee (getURL n'est disponible qu'une fois la page attachee).
+function designUrl(tab) {
+  try {
+    return tab.webview.getURL() || tab.url;
+  } catch {
+    return tab.url;
+  }
+}
+
+function designTabs() {
+  return [...state.sessions.values()].filter((session) => session.type === "design");
+}
+
+function designTitle(design) {
+  return design.title || `Design ${design.url.split("/").pop().slice(0, 8)}`;
+}
+
+// Liste deroulante : designs du projet + nouveau design.
+function openDesignMenu(anchor, cwd, linkedSessionId) {
+  document.querySelector(".design-menu")?.remove();
+  const menu = document.createElement("div");
+  menu.className = "design-menu";
+  const add = (icon, label, onClick, hint = "") => {
+    const item = document.createElement("button");
+    item.type = "button";
+    item.innerHTML = `<i data-lucide="${icon}"></i>`;
+    const text = document.createElement("span");
+    text.textContent = label;
+    item.appendChild(text);
+    if (hint) {
+      item.title = hint;
+    }
+    item.addEventListener("click", () => {
+      menu.remove();
+      onClick();
+    });
+    menu.appendChild(item);
+  };
+  add("palette", "Claude Design (nouveau design)", () => openDesignTab({ home: "design", cwd, linkedSessionId }));
+  add("app-window", "Galerie des artifacts", () => openDesignTab({ home: "artifacts", cwd, linkedSessionId }));
+  const designs = projectDesigns(cwd);
+  if (designs.length) {
+    const label = document.createElement("div");
+    label.className = "design-menu-label";
+    label.textContent = `Designs du projet ${projectName(cwd)}`;
+    menu.appendChild(label);
+  }
+  for (const design of designs) {
+    add("palette", designTitle(design), () => openDesignTab({ url: design.url, cwd, linkedSessionId }), design.url);
+  }
+  const rect = anchor.getBoundingClientRect();
+  menu.style.top = `${rect.bottom + 6}px`;
+  menu.style.left = `${Math.max(8, Math.min(rect.left, window.innerWidth - 340))}px`;
+  document.body.appendChild(menu);
+  createIcons();
+  window.setTimeout(() => document.addEventListener("click", () => menu.remove(), { once: true }), 0);
+}
+
+// Pastille de l'en-tete : nombre de designs du projet de l'onglet actif.
+function refreshDesignChip() {
+  const chip = elements.designChip;
+  const session = gitSessionOf(state.sessions.get(state.activeSessionId));
+  const designs = session ? projectDesigns(session.cwd) : [];
+  chip.classList.toggle("hidden", !designs.length);
+  if (!designs.length) {
+    return;
+  }
+  chip.innerHTML = '<i data-lucide="palette"></i><span class="git-count"></span>';
+  chip.querySelector(".git-count").textContent = String(designs.length);
+  chip.classList.toggle("fresh", Boolean(session.freshDesign));
+  createIcons();
+}
+
+function openDesignTab({ url = "", home = "design", cwd = "", linkedSessionId = "" } = {}) {
+  const page = CLAUDE_PAGES[home] || CLAUDE_PAGES.design;
+  const clean = artifactUrl(url);
+  const existing = clean && designTabs().find((tab) => artifactUrl(designUrl(tab)) === clean);
+  if (existing) {
+    setActiveSession(existing.id);
+    return existing;
+  }
+  const id = `design-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+  const container = document.createElement("div");
+  container.className = "terminal-pane design-pane-host";
+  container.dataset.sessionId = id;
+  container.innerHTML = `
+    <div class="design-bar">
+      <button type="button" class="icon-button design-back" title="Précédent"><i data-lucide="arrow-left"></i></button>
+      <button type="button" class="icon-button design-forward" title="Suivant"><i data-lucide="arrow-right"></i></button>
+      <button type="button" class="icon-button design-reload" title="Recharger"><i data-lucide="rotate-cw"></i></button>
+      <button type="button" class="icon-button design-home" title="Accueil (${page.title})"><i data-lucide="house"></i></button>
+      <button type="button" class="git-chip design-project" title="Projet rattaché : designs du projet"></button>
+      <span class="design-title"></span>
+      <select class="design-target" title="Session IA qui recevra le design"></select>
+      <button type="button" class="primary-button design-send" title="Coller le lien du design dans la session choisie"><i data-lucide="send"></i> Envoyer à l'IA</button>
+      <button type="button" class="icon-button design-external" title="Ouvrir dans le navigateur"><i data-lucide="external-link"></i></button>
+    </div>`;
+  const webview = document.createElement("webview");
+  webview.className = "design-view";
+  webview.setAttribute("partition", "persist:claude-design");
+  webview.setAttribute("allowpopups", "");
+  webview.src = clean || page.url;
+  container.appendChild(webview);
+  elements.terminalHost.appendChild(container);
+
+  const session = { id, type: "design", title: page.title, accent: home === "artifacts" ? "#6aa7ff" : "#d97757", container, webview, cwd, linkedSessionId, url: webview.src };
+  const $ = (selector) => container.querySelector(selector);
+  const target = $(".design-target");
+
+  const refreshProject = () => {
+    const chip = $(".design-project");
+    chip.innerHTML = '<i data-lucide="folder"></i>';
+    chip.append(session.cwd ? projectName(session.cwd) : "Aucun projet");
+    createIcons();
+  };
+  // Sessions IA proposees : celles du projet d'abord.
+  const refreshTargets = () => {
+    const sessions = terminalSessions().sort((a, b) => Number(projectKey(b.cwd) === projectKey(session.cwd)) - Number(projectKey(a.cwd) === projectKey(session.cwd)));
+    const keep = target.value || session.linkedSessionId;
+    target.innerHTML = "";
+    if (!sessions.length) {
+      target.add(new Option("Aucune session IA ouverte", ""));
+    }
+    for (const item of sessions) {
+      target.add(new Option(`${item.title} — ${projectName(item.cwd)}`, item.id));
+    }
+    if (sessions.some((item) => item.id === keep)) {
+      target.value = keep;
+    }
+  };
+  const onNavigate = () => {
+    session.url = webview.getURL();
+    $(".design-title").textContent = webview.getTitle() || session.url;
+    if (artifactUrl(session.url) && session.cwd) {
+      rememberDesign(session.cwd, session.url, webview.getTitle());
+    }
+  };
+
+  $(".design-back").addEventListener("click", () => webview.canGoBack() && webview.goBack());
+  $(".design-forward").addEventListener("click", () => webview.canGoForward() && webview.goForward());
+  $(".design-reload").addEventListener("click", () => webview.reload());
+  $(".design-home").addEventListener("click", () => webview.loadURL(page.url));
+  $(".design-external").addEventListener("click", () => window.launcher.openUrl(designUrl(session)));
+  $(".design-project").addEventListener("click", (event) => {
+    event.stopPropagation();
+    if (session.cwd) {
+      openDesignMenu(event.currentTarget, session.cwd, session.linkedSessionId);
+    }
+  });
+  target.addEventListener("mousedown", refreshTargets);
+  target.addEventListener("focus", refreshTargets);
+  $(".design-send").addEventListener("click", () => {
+    const destination = state.sessions.get(target.value);
+    const url = designUrl(session);
+    if (!destination) {
+      flashStatus("Ouvre d'abord une session IA pour lui envoyer le design.");
+      return;
+    }
+    const link = artifactUrl(url);
+    const text = !link
+      ? `Page claude.ai à utiliser : ${url} — `
+      : link.includes("/design/")
+        ? `Projet Claude Design à reprendre : ${link} — `
+        : `Artifact claude.ai à modifier (lis-le, puis republie-le au même lien) : ${link} — `;
+    pasteToSession(destination, text, false);
+    // Le design rejoint le projet de la session qui le recoit.
+    session.cwd = destination.cwd;
+    session.linkedSessionId = destination.id;
+    refreshProject();
+    if (link) {
+      rememberDesign(destination.cwd, link, webview.getTitle());
+    }
+    setActiveSession(destination.id);
+    flashStatus("Lien du design collé : écris ta consigne puis Entrée.");
+  });
+  webview.addEventListener("did-navigate", onNavigate);
+  webview.addEventListener("did-navigate-in-page", onNavigate);
+  webview.addEventListener("page-title-updated", (event) => {
+    session.title = event.title && !/^claude$/i.test(event.title.trim()) ? event.title.slice(0, 40) : page.title;
+    session.tab.querySelector(".tab-title").textContent = session.title;
+    $(".design-title").textContent = event.title;
+    if (state.activeSessionId === id) {
+      elements.activeTitleInput.value = session.title;
+    }
+    onNavigate();
+  });
+
+  session.tab = createTab(session);
+  state.sessions.set(id, session);
+  refreshProject();
+  refreshTargets();
+  setActiveSession(id);
+  createIcons();
+  return session;
+}
+
+// Barre d'outils en menus par theme : clic pour ouvrir, choix ou clic
+// ailleurs pour fermer.
+function setupToolMenus() {
+  const menus = [...document.querySelectorAll(".tool-menu")];
+  const closeAll = (except) => menus.forEach((menu) => menu !== except && menu.classList.remove("open"));
+  for (const menu of menus) {
+    menu.querySelector(".tool-menu-trigger").addEventListener("click", (event) => {
+      event.stopPropagation();
+      closeAll(menu);
+      menu.classList.toggle("open");
+    });
+    menu.querySelector(".tool-menu-list").addEventListener("click", (event) => {
+      if (event.target.closest(".tool-item")) {
+        menu.classList.remove("open");
+      }
+    });
+  }
+  document.addEventListener("click", () => closeAll());
+}
+
+// Designs publies ou republies par l'IA depuis l'ouverture de ses onglets.
+async function pollArtifacts() {
+  const sessions = terminalSessions().filter((session) => ["claude", "codex"].includes(session.profileId));
+  if (!sessions.length) {
+    return;
+  }
+  let result = {};
+  try {
+    result = await window.launcher.getArtifacts(sessions.map((session) => session.id));
+  } catch {
+    return;
+  }
+  for (const session of sessions) {
+    session.artifactsSince ??= Date.now();
+    session.artifactsSeen ??= new Map();
+    for (const { url, at } of result[session.id] || []) {
+      const seen = session.artifactsSeen.get(url);
+      session.artifactsSeen.set(url, at);
+      const known = projectDesigns(session.cwd).some((design) => design.url === url);
+      if (!known) {
+        rememberDesign(session.cwd, url);
+      }
+      if (at <= session.artifactsSince || (seen !== undefined && at <= seen)) {
+        continue;
+      }
+      // Nouveau design ou republication : l'onglet Design ouvert se recharge.
+      const open = designTabs().filter((tab) => artifactUrl(designUrl(tab)) === url);
+      open.forEach((tab) => tab.webview.reload());
+      if (open.length) {
+        flashStatus(`${session.title} : design mis à jour`);
+      } else {
+        session.freshDesign = true;
+        flashStatus(`${session.title} : l'IA a publié un design — clique sur la palette pour l'ouvrir`);
+      }
+      refreshDesignChip();
+    }
+  }
+}
+
 // Notes de version affichees apres une mise a jour. La cle est le numero de
 // version, la valeur la liste des nouveautes a montrer.
 const CHANGELOG = {
+  "0.1.32": [
+    "Barre d'outils rangée en quatre menus : Créer, Bibliothèque, Affichage et Réglages (raccourcis clavier affichés).",
+    "Claude Design et Artifacts s'ouvrent dans un onglet du Launcher, rattachés au projet de l'onglet actif (connexion à claude.ai gardée).",
+    "« Envoyer à l'IA » colle le lien du design dans la session choisie ; les designs publiés par l'IA sont retrouvés automatiquement et l'onglet se recharge à chaque republication.",
+    "Fichiers copiés dans l'Explorateur : Ctrl+V les colle dans la session, avec un aperçu des pièces jointes jusqu'à l'envoi du message."
+  ],
   "0.1.31": [
     "L'interface du réacteur s'adapte à la taille de la fenêtre et de l'écran : la barre de commande ne passe plus derrière l'activité des IA et le journal vocal quand la fenêtre est réduite ou déplacée sur un autre écran.",
     "Sur les petites fenêtres, les panneaux se réorganisent (sessions sous les systèmes, puis tout empilé avec défilement) et le réacteur se redimensionne sans à-coups."
@@ -7424,6 +7849,19 @@ async function init() {
     }
   }, GIT_POLL_MS);
   window.addEventListener("focus", clearVisibleAttention);
+  // Designs publies par l'IA dans ses onglets.
+  window.setInterval(() => {
+    if (!document.hidden) {
+      pollArtifacts();
+    }
+  }, ARTIFACT_POLL_MS);
+  // Clic droit > Coller sans texte : fichiers copies ou image.
+  window.launcher.onPasteAttachments(({ id }) => {
+    const session = state.sessions.get(id);
+    if (session) {
+      pasteClipboardAttachments(session);
+    }
+  });
   // Clic droit > Coller avec une image dans le presse-papiers.
   window.launcher.onPasteText(({ id, text }) => {
     const session = state.sessions.get(id);

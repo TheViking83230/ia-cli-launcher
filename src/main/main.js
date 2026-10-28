@@ -1,4 +1,4 @@
-const { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, Notification, shell } = require("electron");
+const { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, Notification, session: electronSession, shell } = require("electron");
 const crypto = require("node:crypto");
 const fs = require("node:fs");
 const path = require("node:path");
@@ -418,6 +418,55 @@ function setAppMenu() {
   Menu.setApplicationMenu(menu);
 }
 
+// --- Onglets « Design » (claude.ai) ----------------------------------------
+// Session de navigation dediee et persistante : la connexion a claude.ai est
+// gardee d'un lancement a l'autre.
+const DESIGN_PARTITION = "persist:claude-design";
+const LOGIN_POPUP_HOSTS = ["accounts.google.com", "appleid.apple.com"];
+
+function isClaudeUrl(url) {
+  return /^https:\/\/claude\.ai(\/|$)/i.test(String(url || ""));
+}
+
+function setupDesignBrowsing() {
+  // Agent utilisateur d'un Chrome classique : certaines pages de connexion
+  // refusent les navigateurs integres qui s'annoncent comme tels.
+  const designSession = electronSession.fromPartition(DESIGN_PARTITION);
+  const kept = new Set(["Mozilla", "AppleWebKit", "Chrome", "Safari"]);
+  designSession.setUserAgent(
+    designSession
+      .getUserAgent()
+      .split(app.getName())
+      .join("")
+      .replace(/ ([A-Za-z][\w-]*)\/[\w.]+/g, (token, name) => (kept.has(name) ? token : ""))
+      .replace(/\s+/g, " ")
+  );
+  app.on("web-contents-created", (_event, contents) => {
+    if (contents.getType() !== "webview") {
+      return;
+    }
+    // Liens claude.ai : dans l'onglet ; connexion Google/Apple : fenetre
+    // dediee ; le reste : navigateur par defaut.
+    contents.setWindowOpenHandler(({ url }) => {
+      if (isClaudeUrl(url)) {
+        contents.loadURL(url);
+        return { action: "deny" };
+      }
+      let host = "";
+      try {
+        host = new URL(url).hostname;
+      } catch {}
+      if (LOGIN_POPUP_HOSTS.includes(host)) {
+        return { action: "allow", overrideBrowserWindowOptions: { autoHideMenuBar: true, width: 520, height: 720 } };
+      }
+      if (/^https?:\/\//i.test(url)) {
+        shell.openExternal(url);
+      }
+      return { action: "deny" };
+    });
+  });
+}
+
 function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1320,
@@ -431,7 +480,21 @@ function createWindow() {
       preload: path.join(__dirname, "preload.js"),
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: false
+      sandbox: false,
+      // Onglets « Design » : claude.ai affiche dans un <webview>.
+      webviewTag: true
+    }
+  });
+
+  // Les webviews n'ouvrent que claude.ai, sans acces a Node ni au preload.
+  mainWindow.webContents.on("will-attach-webview", (event, webPreferences, params) => {
+    delete webPreferences.preload;
+    webPreferences.nodeIntegration = false;
+    webPreferences.contextIsolation = true;
+    webPreferences.sandbox = true;
+    params.partition = DESIGN_PARTITION;
+    if (!isClaudeUrl(params.src)) {
+      event.preventDefault();
     }
   });
 
@@ -645,8 +708,30 @@ function normalizeConfig(config) {
     version: 1,
     profiles: [...mergedDefaults, ...customProfiles],
     personas: normalizePersonas(config?.personas),
-    prompts: normalizePrompts(config?.prompts)
+    prompts: normalizePrompts(config?.prompts),
+    designs: normalizeDesigns(config?.designs)
   };
+}
+
+// Designs claude.ai rattaches a chaque projet : { dossier: [{ url, title, at }] }.
+function normalizeDesigns(designs) {
+  const result = {};
+  if (!designs || typeof designs !== "object" || Array.isArray(designs)) {
+    return result;
+  }
+  for (const [project, list] of Object.entries(designs)) {
+    if (!Array.isArray(list)) {
+      continue;
+    }
+    const items = list
+      .filter((design) => isClaudeUrl(design?.url))
+      .slice(0, 50)
+      .map((design) => ({ url: String(design.url), title: String(design.title || "").slice(0, 200), at: Number(design.at) || 0 }));
+    if (items.length) {
+      result[String(project)] = items;
+    }
+  }
+  return result;
 }
 
 function readConfig() {
@@ -1017,6 +1102,7 @@ app.whenReady().then(() => {
   pruneHistory();
   clipboardImage.pruneOldImages();
   setAppMenu();
+  setupDesignBrowsing();
   createWindow();
   setupAutoUpdater();
 
@@ -1096,6 +1182,22 @@ app.whenReady().then(() => {
     return result;
   });
   ipcMain.handle("system:stats", () => systemStats.getStats());
+  // Designs (artifacts claude.ai) publies dans la conversation de chaque onglet.
+  ipcMain.handle("terminal:artifacts", async (_event, ids) => {
+    const result = {};
+    for (const id of ids || []) {
+      const session = sessions.get(id);
+      if (session) {
+        result[id] = await conversation.getArtifacts({
+          profileId: session.profileId,
+          pid: session.pty?.pid,
+          cwd: session.cwd,
+          startedAt: session.startedAt
+        });
+      }
+    }
+    return result;
+  });
 
   ipcMain.handle("config:get", () => readConfig());
   ipcMain.handle("config:save", (_event, config) => writeConfig(config));
@@ -1436,11 +1538,8 @@ app.whenReady().then(() => {
             session.pty.write(text);
             return;
           }
-          // Pas de texte : image du presse-papiers collee sous forme de chemin.
-          const imagePath = clipboardImage.saveClipboardImage();
-          if (imagePath) {
-            sendToRenderer("terminal:paste-text", { id, text: platform.quoteArg(imagePath) });
-          }
+          // Pas de texte : fichiers copies ou image, colles comme pieces jointes.
+          sendToRenderer("terminal:paste-attachments", { id });
         }
       }
     });
@@ -1467,6 +1566,13 @@ app.whenReady().then(() => {
 
   // Image du presse-papiers -> fichier PNG temporaire ; renvoie le texte a
   // coller (chemin), ou null s'il n'y a pas d'image.
+  // Fichiers copies dans l'Explorateur (Ctrl+C) : leurs chemins.
+  ipcMain.handle("clipboard:read-files", () => clipboardImage.readClipboardFiles());
+  ipcMain.handle("system:open-path", (_event, target) => {
+    const file = String(target || "");
+    return fs.existsSync(file) ? shell.openPath(file) : "introuvable";
+  });
+
   ipcMain.handle("clipboard:save-image", () => {
     const imagePath = clipboardImage.saveClipboardImage();
     return imagePath ? { path: imagePath, text: platform.quoteArg(imagePath) } : null;
