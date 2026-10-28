@@ -7280,6 +7280,53 @@ function designTabs() {
   return [...state.sessions.values()].filter((session) => session.type === "design");
 }
 
+function isDesignLoginUrl(url) {
+  return /^https:\/\/claude\.ai\/(login|logout|magic-link)/i.test(String(url || ""));
+}
+
+// Session claude.ai ouverte : les onglets restes sur la connexion repartent
+// sur leur accueil (Design ou Artifacts), les autres se rechargent.
+function reloadDesignLogins(exceptId = "") {
+  for (const tab of designTabs()) {
+    if (tab.id === exceptId) {
+      continue;
+    }
+    if (isDesignLoginUrl(designUrl(tab))) {
+      tab.webview.loadURL(CLAUDE_PAGES[tab.home]?.url || CLAUDE_PAGES.design.url);
+    } else {
+      tab.webview.reload();
+    }
+  }
+}
+
+// Remplit l'adresse sur la page de connexion de claude.ai puis valide ; la
+// page s'hydrate apres le chargement, d'ou les essais repetes.
+function fillLoginEmailScript(email) {
+  return `(async () => {
+    for (let tries = 0; tries < 20; tries += 1) {
+      const input = document.querySelector('input[type="email"], input[name="email"], input#email');
+      if (input) {
+        input.focus();
+        Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set.call(input, ${JSON.stringify(email)});
+        input.dispatchEvent(new Event("input", { bubbles: true }));
+        input.dispatchEvent(new Event("change", { bubbles: true }));
+        await new Promise((resolve) => setTimeout(resolve, 150));
+        const form = input.closest("form");
+        const button = (form && form.querySelector('button[type="submit"]')) ||
+          [...document.querySelectorAll("button")].find((item) => /continu|e-?mail/i.test(item.textContent) && !/google|apple/i.test(item.textContent));
+        if (button && !button.disabled) {
+          button.click();
+        } else if (form) {
+          form.requestSubmit();
+        }
+        return true;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    }
+    return false;
+  })()`;
+}
+
 function designTitle(design) {
   return design.title || `Design ${design.url.split("/").pop().slice(0, 8)}`;
 }
@@ -7363,6 +7410,8 @@ function openDesignTab({ url = "", home = "design", cwd = "", linkedSessionId = 
       <select class="design-target" title="Session IA qui recevra le design"></select>
       <button type="button" class="primary-button design-send" title="Coller le lien du design dans la session choisie"><i data-lucide="send"></i> Envoyer à l'IA</button>
       <button type="button" class="icon-button design-external" title="Ouvrir dans le navigateur"><i data-lucide="external-link"></i></button>
+      <button type="button" class="primary-button design-email hidden" title="Remplir l'adresse du compte de synchronisation et recevoir le code de connexion par mail"><i data-lucide="mail"></i> <span></span></button>
+      <button type="button" class="ghost-button design-magic hidden" title="Coller le lien de connexion reçu par mail (copie-le d'abord)"><i data-lucide="clipboard-paste"></i> Coller le lien reçu</button>
       <button type="button" class="ghost-button design-google hidden" title="Se connecter à claude.ai avec ton compte Google"><i data-lucide="log-in"></i> Connexion Google</button>
     </div>`;
   const webview = document.createElement("webview");
@@ -7443,11 +7492,42 @@ function openDesignTab({ url = "", home = "design", cwd = "", linkedSessionId = 
     setActiveSession(destination.id);
     flashStatus("Lien du design collé : écris ta consigne puis Entrée.");
   });
-  // Page de connexion claude.ai : bouton de connexion Google en un clic.
-  webview.addEventListener("did-navigate", () => {
-    $(".design-google").classList.toggle("hidden", !/claude\.ai\/(login|logout)/.test(designUrl(session)));
+  // Page de connexion claude.ai : connexion par l'adresse du compte de
+  // synchronisation (code par mail), lien recu par mail ou Google.
+  let onLoginPage = false;
+  const refreshLogin = async () => {
+    const wasLogin = onLoginPage;
+    onLoginPage = isDesignLoginUrl(designUrl(session));
+    const email = onLoginPage ? (await window.launcher.gdriveStatus().catch(() => ({})))?.email || "" : "";
+    $(".design-email span").textContent = `Se connecter avec ${email}`;
+    $(".design-email").classList.toggle("hidden", !email);
+    $(".design-magic").classList.toggle("hidden", !onLoginPage);
+    $(".design-google").classList.toggle("hidden", !onLoginPage);
+    // Connecte dans cet onglet : les autres onglets Design le deviennent aussi.
+    if (wasLogin && !onLoginPage && /^https:\/\/claude\.ai\//.test(designUrl(session))) {
+      reloadDesignLogins(id);
+      flashStatus("Connecté à claude.ai : la connexion est gardée pour tous les onglets Design et Artifacts.");
+    }
+  };
+  $(".design-email").addEventListener("click", async () => {
+    const { email } = await window.launcher.gdriveStatus().catch(() => ({}));
+    if (!email) {
+      return;
+    }
+    const filled = await webview.executeJavaScript(fillLoginEmailScript(email)).catch(() => false);
+    flashStatus(filled ? `Code de connexion envoyé à ${email} : entre-le dans la page.` : "Champ e-mail introuvable : saisis l'adresse dans la page.");
+  });
+  $(".design-magic").addEventListener("click", async () => {
+    const text = String((await window.launcher.readClipboardText()) || "").trim();
+    if (!/^https:\/\/claude\.ai\/[^\s]*(magic|verify|login)/i.test(text)) {
+      flashStatus("Copie d'abord le lien de connexion reçu par mail (clic droit > Copier le lien).");
+      return;
+    }
+    webview.loadURL(text);
   });
   $(".design-google").addEventListener("click", () => window.launcher.designGoogleLogin());
+  webview.addEventListener("did-navigate", refreshLogin);
+  webview.addEventListener("did-navigate-in-page", refreshLogin);
   webview.addEventListener("did-navigate", onNavigate);
   webview.addEventListener("did-navigate-in-page", onNavigate);
   webview.addEventListener("page-title-updated", (event) => {
@@ -7531,6 +7611,11 @@ async function pollArtifacts() {
 // Notes de version affichees apres une mise a jour. La cle est le numero de
 // version, la valeur la liste des nouveautes a montrer.
 const CHANGELOG = {
+  "0.1.34": [
+    "Connexion à claude.ai en un clic dans les onglets Claude Design et Artifacts : « Se connecter avec ton adresse » reprend l’adresse du compte de synchronisation Google et il ne reste qu’à entrer le code reçu par mail.",
+    "« Coller le lien reçu » ouvre le lien de connexion du mail directement dans l’onglet du Launcher.",
+    "La connexion est gardée pendant des semaines et partagée par tous les onglets Design et Artifacts : un onglet connecté connecte les autres."
+  ],
   "0.1.33": [
     "Connexion Google à claude.ai dans les onglets Claude Design et Artifacts : un bouton « Connexion Google » ouvre une fenêtre de connexion dédiée, qui se ferme toute seule une fois connecté.",
     "Après la connexion, les onglets Design et Artifacts se rechargent automatiquement, déjà connectés."
@@ -7867,13 +7952,7 @@ async function init() {
   }, ARTIFACT_POLL_MS);
   // Connecte a claude.ai (Google) : les onglets Design affichent la session.
   window.launcher.onDesignLoggedIn(() => {
-    for (const tab of designTabs()) {
-      if (/claude\.ai\/(login|logout)/.test(designUrl(tab))) {
-        tab.webview.loadURL(CLAUDE_PAGES[tab.home]?.url || CLAUDE_PAGES.design.url);
-      } else {
-        tab.webview.reload();
-      }
-    }
+    reloadDesignLogins();
     flashStatus("Connecté à claude.ai : Claude Design et Artifacts sont prêts.");
   });
   // Clic droit > Coller sans texte : fichiers copies ou image.

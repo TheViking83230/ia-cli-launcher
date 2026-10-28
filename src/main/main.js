@@ -1648,6 +1648,7 @@ app.whenReady().then(() => {
   // coller (chemin), ou null s'il n'y a pas d'image.
   // Fichiers copies dans l'Explorateur (Ctrl+C) : leurs chemins.
   ipcMain.handle("clipboard:read-files", () => clipboardImage.readClipboardFiles());
+  ipcMain.handle("clipboard:read-text", () => clipboard.readText());
   ipcMain.handle("system:open-path", (_event, target) => {
     const file = String(target || "");
     return fs.existsSync(file) ? shell.openPath(file) : "introuvable";

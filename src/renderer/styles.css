@@ -3904,12 +3904,16 @@ body.jarvis .tool-menu-list .tool-item:hover:not(:disabled) {
   background: rgba(56, 232, 255, 0.08);
 }
 
-.design-google {
+.design-google,
+.design-email,
+.design-magic {
   min-height: 34px;
   padding: 0 12px;
   white-space: nowrap;
 }
 
-.design-google.hidden {
+.design-google.hidden,
+.design-email.hidden,
+.design-magic.hidden {
   display: none;
 }

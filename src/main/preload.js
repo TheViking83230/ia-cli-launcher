@@ -98,6 +98,7 @@ contextBridge.exposeInMainWorld("launcher", {
   quotePaths: (paths) => ipcRenderer.invoke("system:quote-paths", paths),
   saveClipboardImage: () => ipcRenderer.invoke("clipboard:save-image"),
   readClipboardFiles: () => ipcRenderer.invoke("clipboard:read-files"),
+  readClipboardText: () => ipcRenderer.invoke("clipboard:read-text"),
   openPath: (target) => ipcRenderer.invoke("system:open-path", target),
   onPasteAttachments: (handler) => {
     const listener = (_event, payload) => handler(payload);
