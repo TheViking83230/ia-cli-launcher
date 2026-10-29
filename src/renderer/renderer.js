@@ -1567,6 +1567,13 @@ function renderAttachments(session) {
 // Ctrl+V dans un terminal : le texte reste gere par xterm ; une image ou des
 // fichiers copies (Explorateur) sont interceptes et colles comme chemins.
 function handleTerminalPaste(session, event) {
+  // Un seul collage par appui : un second evenement "paste" arrive parfois
+  // juste apres le premier (raccourci + collage natif) et doublait le texte.
+  if (isDuplicatePaste(session)) {
+    event.preventDefault();
+    event.stopPropagation();
+    return;
+  }
   const data = event.clipboardData;
   if (!data || data.types.includes("text/plain")) {
     return;
@@ -1581,6 +1588,15 @@ function handleTerminalPaste(session, event) {
     // Fichiers de l'Explorateur (absents de l'evenement sous Windows) ou image.
     pasteClipboardAttachments(session);
   }
+}
+
+const PASTE_DEDUP_MS = 300;
+
+function isDuplicatePaste(session) {
+  const now = Date.now();
+  const duplicate = now - (session.lastPasteAt || 0) < PASTE_DEDUP_MS;
+  session.lastPasteAt = now;
+  return duplicate;
 }
 
 function terminalSessions() {
@@ -2118,6 +2134,12 @@ async function openTerminalSession({ title, accent, starter, replayText, spec })
       return false;
     }
     if (event.ctrlKey && event.shiftKey && event.key === "V") {
+      // Sans preventDefault, Chromium colle aussi de son cote (evenement
+      // "paste" repris par xterm) : le texte ou les fichiers arrivaient 2 fois.
+      event.preventDefault();
+      if (isDuplicatePaste(session)) {
+        return false;
+      }
       navigator.clipboard.readText().then((text) => {
         if (text) {
           window.launcher.writeTerminal(session.id, text);
@@ -7611,6 +7633,9 @@ async function pollArtifacts() {
 // Notes de version affichees apres une mise a jour. La cle est le numero de
 // version, la valeur la liste des nouveautes a montrer.
 const CHANGELOG = {
+  "0.1.35": [
+    "Correctif : le collage dans un terminal (Ctrl+V ou Ctrl+Maj+V) ne colle plus le texte ou les fichiers deux fois."
+  ],
   "0.1.34": [
     "Connexion à claude.ai en un clic dans les onglets Claude Design et Artifacts : « Se connecter avec ton adresse » reprend l’adresse du compte de synchronisation Google et il ne reste qu’à entrer le code reçu par mail.",
     "« Coller le lien reçu » ouvre le lien de connexion du mail directement dans l’onglet du Launcher.",
