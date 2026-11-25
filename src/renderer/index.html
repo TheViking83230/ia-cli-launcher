@@ -61,6 +61,16 @@
             <select id="profileSelect"></select>
           </label>
 
+          <div id="accountField" class="account-field hidden">
+            <label class="field">
+              <span>Compte</span>
+              <select id="accountSelect" title="Compte Claude utilisé par les nouveaux onglets"></select>
+            </label>
+            <button id="manageAccountsButton" class="tiny-button" type="button" title="Gérer les comptes Claude">
+              <i data-lucide="users"></i>
+            </button>
+          </div>
+
           <label class="field">
             <span>Mode</span>
             <select id="modeSelect"></select>
@@ -180,6 +190,9 @@
               <button id="restartAiButton" class="icon-button" type="button" title="Redémarrer l'IA de l'onglet (ex. après une mise à jour) en reprenant la conversation" disabled>
                 <i data-lucide="rotate-cw"></i>
               </button>
+              <button id="chatViewButton" class="icon-button" type="button" title="Vue chat : la conversation comme sur claude.ai (Ctrl+Maj+K)" disabled>
+                <i data-lucide="message-circle"></i>
+              </button>
               <select id="relaySelect" class="relay-select" title="Passer le relais à une autre IA (même conversation)" disabled>
                 <option value="">Relais →</option>
               </select>
@@ -240,6 +253,9 @@
                 <div class="tool-menu-list">
                   <button id="shortcutsButton" class="icon-button tool-item" data-label="Raccourcis clavier" type="button" title="Raccourcis clavier (F1)">
                     <i data-lucide="keyboard"></i><kbd class="tool-hint">F1</kbd>
+                  </button>
+                  <button id="accountsButton" class="icon-button tool-item" data-label="Comptes Claude" type="button" title="Comptes Claude (multi-compte)">
+                    <i data-lucide="users"></i>
                   </button>
                   <button id="syncButton" class="icon-button tool-item" data-label="Synchronisation" type="button" title="Synchronisation des données">
                     <i data-lucide="refresh-cw"></i>
@@ -326,6 +342,8 @@
     <script src="./jarvis/pronounce.js"></script>
     <script src="./jarvis/lexicon.js"></script>
     <script src="./jarvis/hud.js"></script>
+    <script src="./chat.js"></script>
+    <script src="./accounts.js"></script>
     <script src="./renderer.js"></script>
   </body>
 </html>

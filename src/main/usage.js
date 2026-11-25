@@ -10,6 +10,7 @@
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
+const claudeAccounts = require("./claudeAccounts");
 
 const CLAUDE_USAGE_URL = "https://api.anthropic.com/api/oauth/usage";
 // Intervalle minimal entre deux appels a l'API, toutes instances confondues
@@ -19,13 +20,17 @@ const CLAUDE_REFRESH_MS = 2 * 60 * 1000;
 const CLAUDE_BACKOFF_MS = 5 * 60 * 1000;
 const CLAUDE_BACKOFF_MAX_MS = 30 * 60 * 1000;
 
-const claudeCache = {
-  data: null,
-  fetchedAt: 0,
-  nextFetchAt: 0,
-  error: "",
-  pending: null
-};
+// Un cache par compte Claude (multi-compte : chaque compte a son quota).
+const claudeCaches = new Map();
+
+function cacheFor(accountId) {
+  let cache = claudeCaches.get(accountId);
+  if (!cache) {
+    cache = { accountId, data: null, fetchedAt: 0, nextFetchAt: 0, error: "", pending: null };
+    claudeCaches.set(accountId, cache);
+  }
+  return cache;
+}
 
 function readJson(file) {
   try {
@@ -63,8 +68,8 @@ function normalizeWindow({ id, label, usedPercent, resetsAt }) {
 
 // --- Claude Code -----------------------------------------------------------
 
-function readClaudeToken() {
-  const configDir = process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), ".claude");
+function readClaudeToken(accountId) {
+  const configDir = claudeAccounts.configDirFor(accountId);
   const oauth = readJson(path.join(configDir, ".credentials.json"))?.claudeAiOauth;
   if (!oauth?.accessToken) {
     return null;
@@ -98,10 +103,13 @@ function claudeWindows(data) {
 // Cache disque partage par toutes les instances du launcher (app installee,
 // version de test...) : une seule interroge Anthropic, les autres relisent ce
 // fichier. Il survit aussi aux redemarrages (dernieres valeurs connues).
-const SHARED_CACHE_FILE = path.join(os.tmpdir(), "ia-cli-launcher-claude-usage.json");
+function sharedCacheFile(accountId) {
+  const suffix = accountId && accountId !== claudeAccounts.DEFAULT_ID ? `-${accountId}` : "";
+  return path.join(os.tmpdir(), `ia-cli-launcher-claude-usage${suffix}.json`);
+}
 
-function loadSharedCache() {
-  const shared = readJson(SHARED_CACHE_FILE);
+function loadSharedCache(claudeCache) {
+  const shared = readJson(sharedCacheFile(claudeCache.accountId));
   if (!shared) {
     return;
   }
@@ -117,9 +125,9 @@ function loadSharedCache() {
   }
 }
 
-function saveSharedCache() {
+function saveSharedCache(claudeCache) {
   try {
-    fs.writeFileSync(SHARED_CACHE_FILE, JSON.stringify({
+    fs.writeFileSync(sharedCacheFile(claudeCache.accountId), JSON.stringify({
       data: claudeCache.data,
       fetchedAt: claudeCache.fetchedAt,
       nextFetchAt: claudeCache.nextFetchAt,
@@ -129,21 +137,21 @@ function saveSharedCache() {
   } catch {}
 }
 
-async function fetchClaudeUsage() {
+async function fetchClaudeUsage(claudeCache) {
   // Une autre instance a peut-etre deja interroge Anthropic (ou est en pause).
-  loadSharedCache();
+  loadSharedCache(claudeCache);
   if (Date.now() < claudeCache.nextFetchAt) {
     return;
   }
   // On reserve le prochain appel avant meme d'interroger (evite les doublons).
   claudeCache.nextFetchAt = Date.now() + CLAUDE_REFRESH_MS;
-  saveSharedCache();
-  await requestClaudeUsage();
-  saveSharedCache();
+  saveSharedCache(claudeCache);
+  await requestClaudeUsage(claudeCache);
+  saveSharedCache(claudeCache);
 }
 
-async function requestClaudeUsage() {
-  const token = readClaudeToken();
+async function requestClaudeUsage(claudeCache) {
+  const token = readClaudeToken(claudeCache.accountId);
   if (!token) {
     claudeCache.error = "Connecte-toi à Claude Code (abonnement Pro / Max) pour voir le quota.";
     claudeCache.nextFetchAt = Date.now() + CLAUDE_REFRESH_MS;
@@ -192,11 +200,12 @@ async function requestClaudeUsage() {
   }
 }
 
-async function getClaudeUsage() {
+async function getClaudeUsage(accountId) {
+  const claudeCache = cacheFor(claudeAccounts.resolveId(accountId));
   if (Date.now() >= claudeCache.nextFetchAt) {
     // Un seul appel en vol, partage par toutes les demandes simultanees.
     if (!claudeCache.pending) {
-      claudeCache.pending = fetchClaudeUsage().finally(() => {
+      claudeCache.pending = fetchClaudeUsage(claudeCache).finally(() => {
         claudeCache.pending = null;
       });
     }
@@ -334,9 +343,9 @@ function getCodexUsage() {
 
 // --- Point d'entree --------------------------------------------------------
 
-async function getUsage({ profileId } = {}) {
+async function getUsage({ profileId, accountId } = {}) {
   if (profileId === "claude") {
-    return { profileId, ...(await getClaudeUsage()) };
+    return { profileId, accountId: claudeAccounts.resolveId(accountId), ...(await getClaudeUsage(accountId)) };
   }
   if (profileId === "codex") {
     return { profileId, ...getCodexUsage() };

@@ -11,6 +11,7 @@ const { exec, execFile } = require("node:child_process");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
+const claudeAccounts = require("./claudeAccounts");
 
 function readJson(file) {
   try {
@@ -59,31 +60,42 @@ function descendantPids(rootPid, parents) {
   return result;
 }
 
-function claudeConfigDir() {
-  return process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), ".claude");
+// Dossiers de configuration de tous les comptes Claude (multi-compte) : un
+// onglet peut tourner sur n'importe lequel.
+function claudeConfigDirs() {
+  return claudeAccounts.allConfigDirs().map((account) => account.configDir);
 }
 
 // Fichier d'etat ecrit par un processus Claude interactif.
 function readClaudeProcessFile(pid) {
-  const data = readJson(path.join(claudeConfigDir(), "sessions", `${pid}.json`));
-  return data?.sessionId ? data : null;
+  for (const configDir of claudeConfigDirs()) {
+    const data = readJson(path.join(configDir, "sessions", `${pid}.json`));
+    if (data?.sessionId) {
+      return data;
+    }
+  }
+  return null;
 }
 
 // Processus Claude descendant du terminal d'un onglet (et son fichier d'etat).
 async function findClaudeProcess(rootPid) {
-  const dir = path.join(claudeConfigDir(), "sessions");
-  let files;
-  try {
-    files = fs.readdirSync(dir).filter((name) => /^\d+\.json$/.test(name));
-  } catch {
-    return null;
+  const candidates = [];
+  for (const configDir of claudeConfigDirs()) {
+    const dir = path.join(configDir, "sessions");
+    try {
+      for (const name of fs.readdirSync(dir)) {
+        if (/^\d+\.json$/.test(name)) {
+          candidates.push(path.join(dir, name));
+        }
+      }
+    } catch {}
   }
-  if (!files.length) {
+  if (!candidates.length) {
     return null;
   }
   const pids = descendantPids(rootPid, await listProcesses());
-  for (const name of files) {
-    const data = readJson(path.join(dir, name));
+  for (const file of candidates) {
+    const data = readJson(file);
     if (data?.sessionId && pids.has(Number(data.pid))) {
       return data;
     }
@@ -257,19 +269,27 @@ const contextCache = new Map();
 
 // Fichier de conversation Claude (~/.claude/projects/<dossier encode>/<id>.jsonl).
 function claudeConversationFile(sessionId, cwd) {
-  const projects = path.join(claudeConfigDir(), "projects");
-  const direct = path.join(projects, String(cwd || "").replace(/[^A-Za-z0-9]/g, "-"), `${sessionId}.jsonl`);
-  if (fs.existsSync(direct)) {
-    return direct;
+  const id = String(sessionId || "");
+  if (!/^[0-9a-f-]{36}$/i.test(id)) {
+    return "";
   }
-  try {
-    for (const dir of fs.readdirSync(projects)) {
-      const candidate = path.join(projects, dir, `${sessionId}.jsonl`);
-      if (fs.existsSync(candidate)) {
-        return candidate;
-      }
+  const dirs = claudeConfigDirs().map((configDir) => path.join(configDir, "projects"));
+  for (const projects of dirs) {
+    const direct = path.join(projects, String(cwd || "").replace(/[^A-Za-z0-9]/g, "-"), `${id}.jsonl`);
+    if (fs.existsSync(direct)) {
+      return direct;
     }
-  } catch {}
+  }
+  for (const projects of dirs) {
+    try {
+      for (const dir of fs.readdirSync(projects)) {
+        const candidate = path.join(projects, dir, `${id}.jsonl`);
+        if (fs.existsSync(candidate)) {
+          return candidate;
+        }
+      }
+    } catch {}
+  }
   return "";
 }
 
@@ -655,9 +675,22 @@ async function getArtifacts({ profileId, pid, cwd, startedAt }) {
   return [];
 }
 
+// Fichier de conversation Claude d'un onglet (vue chat).
+async function getClaudeFile({ profileId, pid, cwd }) {
+  try {
+    if (profileId === "claude" && pid) {
+      const live = await claudeLive(Number(pid), cwd);
+      if (live.conversationId) {
+        return { conversationId: live.conversationId, file: claudeConversationFile(live.conversationId, cwd), state: live.state, waitingFor: live.waitingFor || "" };
+      }
+    }
+  } catch {}
+  return null;
+}
+
 // Oubli du cache d'un terminal ferme.
 function forgetLive(pid) {
   liveCache.delete(Number(pid));
 }
 
-module.exports = { getConversationInfo, getLiveStatus, getLastReply, getActivity, getArtifacts, forgetLive };
+module.exports = { claudeConversationFile, getClaudeFile, getConversationInfo, getLiveStatus, getLastReply, getActivity, getArtifacts, forgetLive };

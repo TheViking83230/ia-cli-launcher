@@ -11,6 +11,8 @@ const pipeline = require("./pipeline");
 const usage = require("./usage");
 const conversation = require("./conversation");
 const claudeHistory = require("./claudeHistory");
+const claudeAccounts = require("./claudeAccounts");
+const claudeChat = require("./claudeChat");
 const gitInfo = require("./gitInfo");
 const jarvis = require("./jarvis");
 const clipboardImage = require("./clipboardImage");
@@ -191,7 +193,8 @@ function saveSessionsToDisk() {
     profileId: s.profileId,
     profileLabel: s.profileLabel,
     modeId: s.modeId,
-    modeLabel: s.modeLabel
+    modeLabel: s.modeLabel,
+    claudeAccountId: s.claudeAccountId || ""
   }));
   try {
     fs.writeFileSync(getSessionsPath(), JSON.stringify(data, null, 2), "utf8");
@@ -1055,6 +1058,12 @@ function startShellSession(request) {
   const terminalEnv = () =>
     Object.fromEntries(Object.entries(process.env).filter(([key]) => !CLAUDE_SESSION_ENV.has(key)));
   const { command: shellCommand, args: shellArgs } = platform.getShell(commandLine);
+  // Multi-compte : un onglet Claude tourne sur le compte choisi (son propre
+  // dossier de configuration, donc ses identifiants et son quota).
+  const claudeAccountId = request.profileId === "claude"
+    ? claudeAccounts.resolveId(request.claudeAccountId || claudeAccounts.activeId())
+    : "";
+  const accountEnv = claudeAccountId ? claudeAccounts.envFor(claudeAccountId) : {};
 
   const ptyProcess = pty.spawn(shellCommand, shellArgs, {
     name: "xterm-256color",
@@ -1063,6 +1072,7 @@ function startShellSession(request) {
     cwd,
     env: {
       ...terminalEnv(),
+      ...accountEnv,
       FORCE_COLOR: "1",
       TERM: "xterm-256color"
     }
@@ -1081,7 +1091,8 @@ function startShellSession(request) {
     profileId: request.profileId,
     profileLabel: request.profileLabel,
     modeId: request.modeId,
-    modeLabel: request.modeLabel
+    modeLabel: request.modeLabel,
+    claudeAccountId
   });
   addHistoryEntry(sessions.get(id));
   saveSessionsToDisk();
@@ -1108,7 +1119,8 @@ function startShellSession(request) {
     id,
     command: commandLine,
     cwd,
-    profileId: request.profileId || ""
+    profileId: request.profileId || "",
+    claudeAccountId
   };
 }
 
@@ -1451,6 +1463,7 @@ app.whenReady().then(() => {
       profileLabel: request.profileLabel,
       modeId: request.modeId,
       modeLabel: request.modeLabel,
+      claudeAccountId: request.claudeAccountId,
       cols: request.cols,
       rows: request.rows
     });
@@ -1466,6 +1479,7 @@ app.whenReady().then(() => {
       profileLabel: request.profileLabel,
       modeId: request.modeId,
       modeLabel: request.modeLabel,
+      claudeAccountId: request.claudeAccountId,
       cols: request.cols,
       rows: request.rows
     });
@@ -1543,6 +1557,37 @@ app.whenReady().then(() => {
   });
 
   ipcMain.handle("claude:conversations", () => claudeHistory.listConversations());
+
+  // Vue chat : messages de la conversation Claude d'un onglet, ou d'une
+  // conversation passee (explorateur). since = version deja affichee.
+  ipcMain.handle("claude:chat", async (_event, { tabId, conversationId, cwd, since } = {}) => {
+    let file = "";
+    let live = null;
+    if (tabId) {
+      const session = sessions.get(tabId);
+      if (!session) {
+        return null;
+      }
+      live = await conversation.getClaudeFile({ profileId: session.profileId, pid: session.pty.pid, cwd: session.cwd });
+      file = live?.file || "";
+    } else if (conversationId) {
+      file = conversation.claudeConversationFile(String(conversationId), String(cwd || ""));
+    }
+    const chat = claudeChat.readChat(file, since);
+    return {
+      conversationId: live?.conversationId || String(conversationId || ""),
+      state: live?.state || null,
+      waitingFor: live?.waitingFor || "",
+      ...(chat || { version: 0, turns: [] })
+    };
+  });
+
+  // Comptes Claude (multi-compte).
+  ipcMain.handle("accounts:list", () => claudeAccounts.list());
+  ipcMain.handle("accounts:add", (_event, label) => claudeAccounts.add(label));
+  ipcMain.handle("accounts:rename", (_event, { id, label } = {}) => claudeAccounts.rename(id, label));
+  ipcMain.handle("accounts:set-active", (_event, id) => claudeAccounts.setActive(id));
+  ipcMain.handle("accounts:remove", (_event, { id, deleteFiles } = {}) => claudeAccounts.remove(id, Boolean(deleteFiles)));
   ipcMain.handle("git:status", (_event, cwd) => gitInfo.getStatus(String(cwd || "")));
   ipcMain.handle("git:diff", (_event, { cwd, file, untracked } = {}) => gitInfo.getDiff(String(cwd || ""), String(file || ""), Boolean(untracked)));
 

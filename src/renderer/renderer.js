@@ -669,6 +669,7 @@ function updateSessionHeader() {
   // Redemarrage possible seulement pour un onglet lance depuis un profil CLI.
   elements.restartAiButton.disabled = !active || isPipeline || active.spec?.kind !== "profile";
   updateRestartButton();
+  updateChatButton();
   refreshGitChip();
   refreshDesignChip();
   if (elements.relaySelect) {
@@ -766,6 +767,14 @@ function renderUsageBar(session, profile, data) {
   const name = document.createElement("strong");
   name.textContent = profile?.label || "CLI";
   head.append(dot, name);
+  const accountLabel = sessionProfileId(session) === "claude" ? accountLabelOf(session.claudeAccountId) : "";
+  if (accountLabel) {
+    const account = document.createElement("span");
+    account.className = "usage-account";
+    account.textContent = accountLabel;
+    account.title = "Compte Claude de cet onglet (quota de ce compte)";
+    head.appendChild(account);
+  }
   bar.appendChild(head);
 
   if (data?.available) {
@@ -882,7 +891,7 @@ async function refreshUsageBar() {
   const profile = state.config?.profiles.find((p) => p.id === profileId);
   let data = null;
   try {
-    data = await window.launcher.getUsage(profileId);
+    data = await window.launcher.getUsage(profileId, profileId === "claude" ? session.claudeAccountId : "");
   } catch {
     data = null;
   }
@@ -987,6 +996,11 @@ function applyAiState(session, aiState, exact, waitingFor) {
   session.tab.classList.toggle("ai-busy", aiState === "busy");
   session.tab.classList.toggle("ai-waiting", aiState === "waiting");
   session.tab.classList.toggle("ai-attention", Boolean(session.attention));
+  if (session.chat?.open) {
+    renderChatStatus(session);
+    renderChatPrompt(session);
+  }
+  maybeAutoOpenChat(session);
 }
 
 function applyUpdateState(session, status) {
@@ -1310,7 +1324,7 @@ async function resumeClaudeConversation(conversation) {
   const open = [...state.sessions.values()].find((s) => s.conversationId === conversation.id);
   if (open) {
     setActiveSession(open.id);
-    return;
+    return open;
   }
   const profile = state.config.profiles.find((p) => p.id === "claude");
   const mode = profile?.modes.find((m) => m.id === profile.defaultModeId) || profile?.modes?.[0];
@@ -1323,7 +1337,8 @@ async function resumeClaudeConversation(conversation) {
     return;
   }
   const title = conversation.title.slice(0, 60);
-  const spec = { kind: "profile", title, accent: profile.accent, profileId: profile.id, modeId: mode.id, extraArgs: "", cwd: conversation.cwd };
+  const claudeAccountId = conversation.accountId || "";
+  const spec = { kind: "profile", title, accent: profile.accent, profileId: profile.id, modeId: mode.id, extraArgs: "", cwd: conversation.cwd, claudeAccountId };
   const session = await openTerminalSession({
     title,
     accent: profile.accent,
@@ -1342,6 +1357,7 @@ async function resumeClaudeConversation(conversation) {
         modeLabel: mode.label,
         resumeArgs: ["--resume", conversation.id],
         stripArgs: ["--continue", "-c"],
+        claudeAccountId,
         cols,
         rows
       })
@@ -1349,6 +1365,7 @@ async function resumeClaudeConversation(conversation) {
   if (session) {
     session.conversationId = conversation.id;
   }
+  return session;
 }
 
 async function openConversations() {
@@ -1385,10 +1402,10 @@ async function openConversations() {
       return;
     }
     for (const conversation of shown) {
-      const item = document.createElement("button");
-      item.type = "button";
-      item.className = "conversation-item";
-      item.disabled = !conversation.dirExists;
+      const item = document.createElement("div");
+      item.className = `conversation-item${conversation.dirExists ? "" : " disabled"}`;
+      item.tabIndex = 0;
+      item.setAttribute("role", "button");
 
       const top = document.createElement("div");
       top.className = "conversation-top";
@@ -1400,6 +1417,24 @@ async function openConversations() {
       date.textContent = formatRelativeDate(conversation.updatedAt);
       date.title = new Date(conversation.updatedAt).toLocaleString("fr-FR");
       top.append(title, date);
+      const accountLabel = accountLabelOf(conversation.accountId);
+      if (accountLabel) {
+        const account = document.createElement("span");
+        account.className = "conversation-account";
+        account.textContent = accountLabel;
+        top.insertBefore(account, date);
+      }
+      const read = document.createElement("button");
+      read.type = "button";
+      read.className = "conversation-read";
+      read.title = "Lire la conversation comme sur claude.ai";
+      read.innerHTML = '<i data-lucide="message-circle"></i>Lire';
+      read.addEventListener("click", (event) => {
+        event.stopPropagation();
+        modal.close();
+        openConversationReader(conversation);
+      });
+      top.appendChild(read);
       if (openIds.has(conversation.id)) {
         const badge = document.createElement("span");
         badge.className = "conversation-open";
@@ -1418,11 +1453,20 @@ async function openConversations() {
 
       item.append(top, meta, preview);
       item.addEventListener("click", () => {
+        if (!conversation.dirExists) {
+          return;
+        }
         modal.close();
         resumeClaudeConversation(conversation);
       });
+      item.addEventListener("keydown", (event) => {
+        if (event.key === "Enter") {
+          item.click();
+        }
+      });
       list.appendChild(item);
     }
+    createIcons();
   };
   search.addEventListener("input", render);
   render();
@@ -1567,6 +1611,10 @@ function renderAttachments(session) {
 // Ctrl+V dans un terminal : le texte reste gere par xterm ; une image ou des
 // fichiers copies (Explorateur) sont interceptes et colles comme chemins.
 function handleTerminalPaste(session, event) {
+  // Zone de saisie de la vue chat : collage gere par la vue chat elle-meme.
+  if (event.target?.closest?.(".chat-view")) {
+    return;
+  }
   // Un seul collage par appui : un second evenement "paste" arrive parfois
   // juste apres le premier (raccourci + collage natif) et doublait le texte.
   if (isDuplicatePaste(session)) {
@@ -1795,7 +1843,12 @@ function fitVisible() {
         } catch {}
       }
     }
-    state.sessions.get(state.activeSessionId)?.terminal?.focus();
+    const active = state.sessions.get(state.activeSessionId);
+    if (active?.chat?.open) {
+      active.chat.input.focus();
+    } else {
+      active?.terminal?.focus();
+    }
   }, 30);
 }
 
@@ -2012,6 +2065,7 @@ async function closeSession(id) {
   }
 
   if (session.type === "terminal") {
+    disposeChatView(session);
     await window.launcher.killTerminal(id);
     session.terminal.dispose();
   }
@@ -2105,6 +2159,10 @@ async function openTerminalSession({ title, accent, starter, replayText, spec })
   });
 
   session.container.addEventListener("contextmenu", (event) => {
+    // Vue chat : pas de menu du terminal (copier avec Ctrl+C).
+    if (event.target?.closest?.(".chat-view")) {
+      return;
+    }
     event.preventDefault();
     event.stopPropagation();
     window.launcher.showTerminalContextMenu(session.id, terminal.getSelection());
@@ -2152,7 +2210,12 @@ async function openTerminalSession({ title, accent, starter, replayText, spec })
     return true;
   });
 
+  session.claudeAccountId = startResult.claudeAccountId || "";
+  if (session.spec && session.claudeAccountId) {
+    session.spec.claudeAccountId = session.claudeAccountId;
+  }
   registerSession(session);
+  updateTabAccount(session);
   return session;
 }
 
@@ -2208,7 +2271,8 @@ async function restoreSession(saved) {
         profileId: saved.profileId,
         modeId: saved.modeId,
         extraArgs: saved.extraArgs || "",
-        cwd
+        cwd,
+        claudeAccountId: saved.claudeAccountId || ""
       }
     : null;
 
@@ -2233,6 +2297,7 @@ async function restoreSession(saved) {
           profileLabel: saved.profileLabel,
           modeId: saved.modeId,
           modeLabel: saved.modeLabel,
+          claudeAccountId: saved.claudeAccountId || "",
           cols,
           rows
         });
@@ -2248,6 +2313,7 @@ async function restoreSession(saved) {
         profileLabel: saved.profileLabel,
         modeId: saved.modeId,
         modeLabel: saved.modeLabel,
+        claudeAccountId: saved.claudeAccountId || "",
         cols,
         rows
       });
@@ -2368,7 +2434,7 @@ function framePersonaMessage(personaPrompt) {
   return `Consigne de session à respecter STRICTEMENT pour toutes tes réponses, comme si elle faisait partie de ta configuration : ${personaPrompt} — Réponds simplement « Compris. » puis attends ma demande.`;
 }
 
-async function launchFromProfile({ profileId, modeId, extraArgs, cwd, title, accent, personaId }) {
+async function launchFromProfile({ profileId, modeId, extraArgs, cwd, title, accent, personaId, claudeAccountId }) {
   const profile = state.config.profiles.find((p) => p.id === profileId);
   const mode = profile?.modes.find((m) => m.id === modeId);
   if (!profile || !mode) {
@@ -2386,7 +2452,8 @@ async function launchFromProfile({ profileId, modeId, extraArgs, cwd, title, acc
     modeId,
     extraArgs: extraArgs || "",
     cwd,
-    personaId: persona ? personaId : ""
+    personaId: persona ? personaId : "",
+    claudeAccountId: claudeAccountId || ""
   };
 
   const session = await openTerminalSession({
@@ -2407,6 +2474,7 @@ async function launchFromProfile({ profileId, modeId, extraArgs, cwd, title, acc
         modeLabel: mode.label,
         personaPrompt: persona?.prompt || "",
         personaInjection: persona ? profile.personaInjection || null : null,
+        claudeAccountId: claudeAccountId || "",
         cols,
         rows
       })
@@ -2446,7 +2514,8 @@ async function launchSession() {
     cwd: state.selectedFolder,
     title,
     accent: profile.accent,
-    personaId: persona?.id || ""
+    personaId: persona?.id || "",
+    claudeAccountId: profile.id === "claude" ? selectedAccountId() : ""
   });
 }
 
@@ -2667,6 +2736,7 @@ async function relaySession(id, profileId) {
       modeLabel: mode.label,
       personaPrompt: handoff,
       personaInjection: profile.personaInjection || null,
+      claudeAccountId: session.spec?.claudeAccountId || session.claudeAccountId || "",
       cols: session.terminal.cols,
       rows: session.terminal.rows
     });
@@ -2688,7 +2758,8 @@ async function relaySession(id, profileId) {
     modeId: mode.id,
     extraArgs: "",
     cwd: startResult.cwd,
-    personaId: session.spec?.personaId || ""
+    personaId: session.spec?.personaId || "",
+    claudeAccountId: startResult.claudeAccountId || ""
   });
 
   // CLI sans canal d'instructions fiable (ex. Codex) : le contexte de relais
@@ -2710,6 +2781,10 @@ function rebindSession(session, oldId, startResult, profile, spec) {
   session.profileId = startResult.profileId || profile.id;
   session.accent = profile.accent;
   session.spec = spec;
+  session.claudeAccountId = startResult.claudeAccountId || "";
+  if (spec && session.claudeAccountId) {
+    spec.claudeAccountId = session.claudeAccountId;
+  }
   session.container.dataset.sessionId = session.id;
   state.sessions.set(session.id, session);
   session.relaying = false;
@@ -2721,6 +2796,11 @@ function rebindSession(session, oldId, startResult, profile, spec) {
   session.context = null;
   session.tab.classList.remove("ended", "ai-busy", "ai-waiting", "ai-attention");
   session.tab.style.setProperty("--tab-accent", profile.accent);
+  updateTabAccount(session);
+  // Relais vers une autre IA que Claude : plus de vue chat possible.
+  if (session.chat?.open && !isChatCapable(session)) {
+    setChatView(session, false, false);
+  }
   if (state.split) {
     if (state.split.leftId === oldId) {
       state.split.leftId = session.id;
@@ -2848,6 +2928,7 @@ async function restartSession(id) {
         stripArgs: plan?.stripArgs || [],
         personaPrompt: injectNow ? contextPrompt : "",
         personaInjection: injectNow ? profile.personaInjection || null : null,
+        claudeAccountId: spec.claudeAccountId || session.claudeAccountId || "",
         cols: session.terminal.cols,
         rows: session.terminal.rows
       });
@@ -3084,6 +3165,8 @@ const SHORTCUT_ACTIONS = [
   { id: "restartAllUpdates", label: "Redémarrer toutes les IA ayant une mise à jour en attente", category: "Onglets", run: () => restartAllWithUpdate() },
   { id: "restartAllSameCli", label: "Redémarrer toutes les IA du même type que l'onglet actif", category: "Onglets", run: () => restartAllSameCli() },
   { id: "toggleNotifications", label: "Activer / désactiver les notifications de fin de tâche", category: "Onglets", run: () => toggleNotifications() },
+  { id: "toggleChatView", label: "Vue chat / terminal de l'onglet Claude", category: "Onglets", run: () => toggleChatView() },
+  { id: "openAccounts", label: "Comptes Claude (multi-compte)", category: "Navigation", run: () => openAccountsModal() },
   { id: "openConversations", label: "Conversations Claude (reprendre une conversation)", category: "Navigation", run: () => openConversations() },
   { id: "openPrompts", label: "Bibliothèque de prompts", category: "Navigation", run: () => openPrompts() },
   { id: "openJarvis", label: "JARVIS", category: "Navigation", run: () => openJarvis() },
@@ -3115,6 +3198,8 @@ const DEFAULT_KEYBINDINGS = {
   relaunchTab: "Ctrl+Shift+R",
   restartAi: "Ctrl+Shift+U",
   openConversations: "Ctrl+Shift+O",
+  toggleChatView: "Ctrl+Shift+K",
+  openAccounts: "",
   openPrompts: "Ctrl+Shift+L",
   openGitChanges: "Ctrl+Shift+G",
   renameTab: "F2",
@@ -4716,7 +4801,15 @@ function bindEvents() {
   elements.profileSelect.addEventListener("change", () => {
     renderModes();
     renderProfileSettings();
+    renderAccountSelect();
   });
+  document.getElementById("accountSelect")?.addEventListener("change", async (event) => {
+    await window.launcher.setActiveAccount(event.target.value);
+    await refreshAccounts();
+  });
+  document.getElementById("manageAccountsButton")?.addEventListener("click", openAccountsModal);
+  document.getElementById("accountsButton")?.addEventListener("click", openAccountsModal);
+  document.getElementById("chatViewButton")?.addEventListener("click", toggleChatView);
 
   elements.modeSelect.addEventListener("change", renderProfileSettings);
   elements.personaSelect.addEventListener("change", () => {
@@ -7633,6 +7726,12 @@ async function pollArtifacts() {
 // Notes de version affichees apres une mise a jour. La cle est le numero de
 // version, la valeur la liste des nouveautes a montrer.
 const CHANGELOG = {
+  "0.1.36": [
+    "Vue chat (bouton bulle dans l'en-tête ou Ctrl+Maj+K) : la conversation d'un onglet Claude s'affiche comme sur claude.ai, avec bulles, mise en forme, blocs de code copiables et actions de l'IA résumées ; tu écris dans la zone du bas, et quand Claude demande une autorisation, sa question s'affiche avec des touches pour répondre.",
+    "Conversations Claude : un bouton « Lire » affiche une ancienne conversation en vue chat, sans la relancer.",
+    "Multi-compte Claude : connecte plusieurs abonnements (Réglages > Comptes Claude) et choisis le compte de chaque nouvel onglet dans le menu de gauche ; chaque onglet affiche son compte et le quota de ce compte.",
+    "En-tête mieux rangé sur les petites fenêtres : le titre se réduit pour laisser la place au quota, plus rien ne passe à la ligne ni ne se chevauche."
+  ],
   "0.1.35": [
     "Correctif : le collage dans un terminal (Ctrl+V ou Ctrl+Maj+V) ne colle plus le texte ou les fichiers deux fois."
   ],
@@ -7938,6 +8037,7 @@ async function init() {
     });
   }
 
+  await refreshAccounts();
   const savedSessions = await window.launcher.getSavedSessions();
   const autoRestore = isAutoRestoreEnabled();
 

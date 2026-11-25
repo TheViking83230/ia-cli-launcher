@@ -3,16 +3,12 @@
 // seulement le debut (dossier, premier message) et la fin (titre, dernier
 // message), avec un cache par fichier pour ne pas relire ce qui n'a pas change.
 const fs = require("node:fs");
-const os = require("node:os");
 const path = require("node:path");
+const claudeAccounts = require("./claudeAccounts");
 
 const HEAD_BYTES = 256 * 1024;
 const TAIL_BYTES = 256 * 1024;
 const cache = new Map();
-
-function claudeConfigDir() {
-  return process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), ".claude");
-}
 
 function readSlice(file, start, length) {
   let fd;
@@ -110,15 +106,22 @@ function summarize(file, stat) {
   };
 }
 
-// Liste les conversations, de la plus recente a la plus ancienne.
+// Liste les conversations de tous les comptes Claude, de la plus recente a la
+// plus ancienne.
 function listConversations({ limit = 400 } = {}) {
-  const root = path.join(claudeConfigDir(), "projects");
   const files = [];
+  for (const account of claudeAccounts.allConfigDirs()) {
+    collectFiles(path.join(account.configDir, "projects"), account, files);
+  }
+  return buildList(files, limit);
+}
+
+function collectFiles(root, account, files) {
   let dirs = [];
   try {
     dirs = fs.readdirSync(root, { withFileTypes: true }).filter((d) => d.isDirectory());
   } catch {
-    return [];
+    return;
   }
   for (const dir of dirs) {
     let names = [];
@@ -132,15 +135,18 @@ function listConversations({ limit = 400 } = {}) {
       try {
         const stat = fs.statSync(file);
         if (stat.size > 0) {
-          files.push({ file, stat });
+          files.push({ file, stat, account });
         }
       } catch {}
     }
   }
+}
+
+function buildList(files, limit) {
   files.sort((a, b) => b.stat.mtimeMs - a.stat.mtimeMs);
 
   const result = [];
-  for (const { file, stat } of files.slice(0, limit)) {
+  for (const { file, stat, account } of files.slice(0, limit)) {
     const key = `${file}|${stat.mtimeMs}|${stat.size}`;
     let info = cache.get(file);
     if (!info || info.key !== key) {
@@ -159,6 +165,8 @@ function listConversations({ limit = 400 } = {}) {
       id: path.basename(file, ".jsonl"),
       ...info.data,
       dirExists,
+      accountId: account.id,
+      accountLabel: account.label,
       updatedAt: stat.mtimeMs,
       size: stat.size
     });
