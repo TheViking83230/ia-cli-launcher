@@ -7814,6 +7814,9 @@ async function pollArtifacts() {
 // Notes de version affichees apres une mise a jour. La cle est le numero de
 // version, la valeur la liste des nouveautes a montrer.
 const CHANGELOG = {
+  "0.1.42": [
+    "Nouvel installateur maison pour Windows (IA-CLI-Launcher-Setup) : une fenêtre aux couleurs du logiciel, avec l'icône animée, un petit terminal qui tape les commandes des IA, les options (raccourci Bureau, JARVIS, lancer à la fin) et une vraie barre de progression. Les mises à jour automatiques ne changent pas."
+  ],
   "0.1.41": [
     "Correctif : impossible de quitter JARVIS depuis la 0.1.39 (le bouton ✕ du HUD était caché sous les boutons de la fenêtre). Le HUD leur laisse maintenant la place, et les boutons de la fenêtre prennent ses couleurs quand il est ouvert."
   ],

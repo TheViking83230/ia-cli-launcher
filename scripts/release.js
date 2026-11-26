@@ -278,7 +278,12 @@ async function publish(token, assets, notes) {
     if (!latest.startsWith(`version: ${version}`)) {
       fail("dist/latest.yml ne correspond pas a la version.");
     }
+    // Installateur maison (fenetre aux couleurs du logiciel) qui contient
+    // l'installateur NSIS ; NSIS reste utilise pour les mises a jour.
+    step("Installateur maison");
+    run("powershell.exe", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", path.join(ROOT, "scripts", "build-setup.ps1")]);
     assets.push(
+      path.join(distDir, `IA-CLI-Launcher-Setup-${version}.exe`),
       path.join(distDir, `IA-CLI-Launcher-${version}-x64.exe`),
       path.join(distDir, `IA-CLI-Launcher-${version}-x64.exe.blockmap`),
       path.join(distDir, "latest.yml")

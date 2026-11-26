@@ -4,6 +4,11 @@ Application Windows et Linux pour lancer des CLI IA dans des onglets terminal no
 
 Le code source est unique : les deux versions evoluent ensemble. Une couche d'abstraction (`src/main/platform.js`) isole les differences entre systemes (shell, quoting, detection de commande, droits eleves).
 
+## Installation
+
+- **Windows** : telecharge `IA-CLI-Launcher-Setup-<version>.exe` dans la [derniere version](https://github.com/TheViking83230/ia-cli-launcher/releases/latest). L'installateur maison (fenetre aux couleurs du logiciel) propose le raccourci Bureau, JARVIS et le lancement a la fin. Le fichier `IA-CLI-Launcher-<version>-x64.exe` (installateur NSIS classique) sert aux mises a jour automatiques.
+- **Linux** : paquet `.deb` ou `AppImage` dans la meme page.
+
 ## Apercu
 
 > Captures realisees avec des projets fictifs (dossier de demonstration).
@@ -56,7 +61,7 @@ Roue dentee > « Theme et couleurs » : 9 couleurs ou une couleur personnalisee 
 - Ajout de profils CLI personnalises.
 - Glisser-deposer de fichier: le chemin est colle dans le terminal actif (dans la vue chat : ajoute en piece jointe).
 - Copier / coller habituels dans le terminal : Ctrl+C copie, Ctrl+V colle, Ctrl+Maj+C interrompt.
-- Build Windows: installateur NSIS aux couleurs du logiciel (theme sombre, en francais ; images generees par `build/installer-art.ps1`), raccourcis bureau/menu demarrer et execution admin.
+- Build Windows: installateur maison `installer/setup.cc` (fenetre GDI+ sans bordure, construit par `scripts/build-setup.ps1`, contient l'installateur NSIS et le lance en silencieux) ; installateur NSIS aux couleurs du logiciel (theme sombre, en francais ; images generees par `build/installer-art.ps1`), raccourcis bureau/menu demarrer et execution admin.
 - Build Linux: paquet `.deb` (raccourci dans le menu d'applications).
 - Signature Authenticode via certificat PFX, avec option auto-signee pour les tests (Windows).
 

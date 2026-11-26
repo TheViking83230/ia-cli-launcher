@@ -19,3 +19,4 @@ out/
 # Sons bruts (sources) : seuls ceux copies dans src/renderer/jarvis/sounds sont
 # livres. Le depot est public : pas de musique sous droits.
 /Son/
+installer/obj/
