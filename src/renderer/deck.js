@@ -435,6 +435,7 @@ function openSettingsPopover() {
   openDeckPopover(deck.el.settingsButton, (pop) => {
     popTitle(pop, "Réglages");
     popItem(pop, "Interface (nouvelle / classique)", openInterfaceSettings, { iconName: "layout-dashboard" });
+    popItem(pop, "Thème et couleurs", openThemeSettings, { iconName: "palette" });
     popItem(pop, "Gérer les profils CLI", openProfilesModal, { iconName: "settings-2" });
     popItem(pop, "Gérer les personas", openPersonasModal, { iconName: "sparkles" });
     popItem(pop, "Comptes Claude", openAccountsModal, { iconName: "users" });
@@ -499,6 +500,7 @@ function commandItems() {
   add("Outil", "Artifacts", () => elements.artifactsButton.click());
   add("Outil", "Changements Git de l'onglet", openGitChanges, "openGitChanges");
   add("Réglages", "Interface (nouvelle / classique)", openInterfaceSettings, "openInterface");
+  add("Réglages", "Thème et couleurs", openThemeSettings);
   add("Réglages", "Comptes Claude", openAccountsModal, "openAccounts");
   add("Réglages", "Synchronisation", () => elements.syncButton.click());
   add("Réglages", "Raccourcis clavier", openShortcutsModal, "openShortcuts");
@@ -1333,12 +1335,191 @@ function hookGlobal(name, after) {
   };
 }
 
+// --- Themes de couleurs ------------------------------------------------------------
+const THEME_KEY = "deckTheme";
+const THEME_PRESETS = [
+  { id: "citron", name: "Citron", color: "#C6F432" },
+  { id: "claude", name: "Claude", color: "#D97757" },
+  { id: "ocean", name: "Océan", color: "#5B8DEF" },
+  { id: "jarvis", name: "Cyan", color: "#5BE7FF" },
+  { id: "lavande", name: "Lavande", color: "#B79CFF" },
+  { id: "menthe", name: "Menthe", color: "#5FD68A" },
+  { id: "ambre", name: "Ambre", color: "#F5C04A" },
+  { id: "rose", name: "Rose", color: "#FF6B9A" },
+  { id: "ardoise", name: "Ardoise", color: "#AEB6C4" }
+];
+const THEME_DEFAULT = { accent: "#C6F432", bubble: "neutral", bubbleColor: "#3A4252" };
+
+function loadTheme() {
+  try {
+    return { ...THEME_DEFAULT, ...JSON.parse(readStorage(THEME_KEY) || "{}") };
+  } catch {
+    return { ...THEME_DEFAULT };
+  }
+}
+
+function hexToRgb(hex) {
+  const value = String(hex || "").replace("#", "");
+  const full = value.length === 3 ? value.split("").map((c) => c + c).join("") : value;
+  const n = parseInt(full, 16);
+  if (!/^[0-9a-f]{6}$/i.test(full) || Number.isNaN(n)) {
+    return [198, 244, 50];
+  }
+  return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+}
+
+// Texte lisible pose sur une couleur : sombre sur couleur claire, et inversement.
+function inkFor(hex) {
+  const [r, g, b] = hexToRgb(hex).map((c) => {
+    const v = c / 255;
+    return v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4;
+  });
+  const luminance = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+  return luminance > 0.3 ? "#0B0D10" : "#F5F7FA";
+}
+
+function lighten(hex, amount = 0.18) {
+  const rgb = hexToRgb(hex).map((c) => Math.round(c + (255 - c) * amount));
+  return `#${rgb.map((c) => c.toString(16).padStart(2, "0")).join("")}`;
+}
+
+function applyDeckTheme(theme = loadTheme()) {
+  const style = document.body.style;
+  const accent = theme.accent || THEME_DEFAULT.accent;
+  style.setProperty("--accent", accent);
+  style.setProperty("--accent-rgb", hexToRgb(accent).join(", "));
+  style.setProperty("--accent-ink", inkFor(accent));
+  style.setProperty("--accent-hover", lighten(accent));
+  const bubble = theme.bubble === "accent" ? accent : theme.bubble === "custom" ? theme.bubbleColor : "#1F242D";
+  style.setProperty("--bubble-bg", bubble);
+  style.setProperty("--bubble-ink", theme.bubble === "neutral" ? "#E8EAEE" : inkFor(bubble));
+  // Curseur des terminaux a la couleur du theme.
+  TERMINAL_THEME.cursor = accent;
+  for (const session of state.sessions.values()) {
+    if (session.terminal && !document.body.classList.contains("jarvis")) {
+      try {
+        session.terminal.options.theme = { ...TERMINAL_THEME };
+      } catch {}
+    }
+  }
+}
+
+function saveTheme(patch) {
+  const theme = { ...loadTheme(), ...patch };
+  writeStorage(THEME_KEY, JSON.stringify(theme));
+  applyDeckTheme(theme);
+  return theme;
+}
+
+function openThemeSettings() {
+  closeDeckPopover();
+  closeDeckPalette();
+  const modal = createModal({
+    icon: "palette",
+    title: "Thème et couleurs",
+    sub: "Couleur principale de l'interface et couleur des bulles de tes messages dans la vue chat. Les changements s'appliquent tout de suite.",
+    dialogClass: "deck-theme-dialog"
+  });
+  const body = modal.body;
+
+  const section = (label) => {
+    const title = make("div", "deck-theme-label");
+    title.textContent = label;
+    body.appendChild(title);
+  };
+
+  section("Couleur du thème");
+  const swatches = make("div", "deck-swatches");
+  body.appendChild(swatches);
+  const customRow = make("label", "deck-theme-custom");
+  const customInput = document.createElement("input");
+  customInput.type = "color";
+  customRow.append(customInput, Object.assign(document.createElement("span"), { textContent: "Couleur personnalisée" }));
+  body.appendChild(customRow);
+
+  section("Bulles de tes messages (vue chat)");
+  const bubbles = make("div", "deck-bubble-choices");
+  body.appendChild(bubbles);
+  const bubbleCustom = document.createElement("input");
+  bubbleCustom.type = "color";
+
+  section("Aperçu");
+  const preview = make("div", "deck-theme-preview");
+  const previewButton = make("span", "deck-btn primary", "Lancer Claude Code");
+  const previewChip = make("span", "deck-chip-mode selected", "Standard");
+  const previewBubble = make("span", "deck-theme-bubble", "Refonds la page d'accueil");
+  preview.append(previewButton, previewChip, previewBubble);
+  body.appendChild(preview);
+
+  const render = () => {
+    const theme = loadTheme();
+    swatches.innerHTML = "";
+    for (const preset of THEME_PRESETS) {
+      const swatch = make("button", `deck-swatch${preset.color.toLowerCase() === theme.accent.toLowerCase() ? " selected" : ""}`);
+      swatch.type = "button";
+      swatch.title = preset.name;
+      const dot = make("span", "deck-swatch-dot");
+      dot.style.background = preset.color;
+      const name = make("span", "deck-swatch-name");
+      name.textContent = preset.name;
+      swatch.append(dot, name);
+      swatch.addEventListener("click", () => {
+        saveTheme({ accent: preset.color });
+        render();
+      });
+      swatches.appendChild(swatch);
+    }
+    customInput.value = theme.accent.length === 7 ? theme.accent : "#c6f432";
+
+    bubbles.innerHTML = "";
+    const choices = [
+      ["neutral", "Neutre (gris)"],
+      ["accent", "Couleur du thème"],
+      ["custom", "Personnalisée"]
+    ];
+    for (const [id, label] of choices) {
+      const chip = make("button", `deck-chip-mode${theme.bubble === id ? " selected" : ""}`);
+      chip.type = "button";
+      chip.textContent = label;
+      chip.addEventListener("click", () => {
+        saveTheme({ bubble: id });
+        render();
+      });
+      bubbles.appendChild(chip);
+    }
+    bubbleCustom.value = theme.bubbleColor;
+    bubbleCustom.classList.toggle("hidden", theme.bubble !== "custom");
+    bubbles.appendChild(bubbleCustom);
+  };
+  customInput.addEventListener("input", () => {
+    saveTheme({ accent: customInput.value });
+    render();
+  });
+  bubbleCustom.addEventListener("input", () => {
+    saveTheme({ bubble: "custom", bubbleColor: bubbleCustom.value });
+  });
+  bubbleCustom.addEventListener("change", render);
+
+  const reset = document.createElement("button");
+  reset.type = "button";
+  reset.className = "ghost-button";
+  reset.textContent = "Réinitialiser";
+  reset.addEventListener("click", () => {
+    writeStorage(THEME_KEY, null);
+    applyDeckTheme();
+    render();
+  });
+  modal.actions.prepend(reset);
+  render();
+  createIcons();
+}
+
 // --- Construction de l'interface ---------------------------------------------------
 function buildDeck() {
   document.body.classList.add("ui-deck");
   // Fond du terminal aligne sur le theme (avant la creation des terminaux).
   TERMINAL_THEME.background = "#0B0D10";
-  TERMINAL_THEME.cursor = "#C6F432";
+  applyDeckTheme();
 
   const shell = elements.appShell;
   const workspace = shell.querySelector(".workspace");

@@ -52,7 +52,12 @@ body.ui-deck {
   --muted: #8b93a1;
   --soft: #5a6272;
   --accent: #c6f432;
-  --accent-strong: #c6f432;
+  --accent-rgb: 198, 244, 50;
+  --accent-ink: #0b0d10;
+  --accent-hover: #d4ff5a;
+  --accent-strong: var(--accent);
+  --bubble-bg: #1f242d;
+  --bubble-ink: #e8eaee;
   --warn: #f5c04a;
   --warning: #f5c04a;
   --danger: #ff9f5a;
@@ -125,7 +130,7 @@ body.ui-deck ::-webkit-scrollbar-track {
 body.ui-deck button:focus-visible,
 body.ui-deck input:focus-visible,
 body.ui-deck select:focus-visible {
-  outline: 2px solid rgba(198, 244, 50, 0.55);
+  outline: 2px solid rgba(var(--accent-rgb), 0.55);
   outline-offset: 1px;
 }
 
@@ -161,11 +166,11 @@ body.ui-deck .deck-spacer {
 body.ui-deck .primary-button {
   border-color: transparent;
   background: var(--accent);
-  color: #0b0d10;
+  color: var(--accent-ink);
 }
 
 body.ui-deck .primary-button:hover {
-  background: #d4ff5a;
+  background: var(--accent-hover);
 }
 
 body.ui-deck .ghost-button,
@@ -184,8 +189,8 @@ body.ui-deck textarea {
 body.ui-deck input:focus,
 body.ui-deck select:focus,
 body.ui-deck textarea:focus {
-  border-color: rgba(198, 244, 50, 0.55);
-  box-shadow: 0 0 0 3px rgba(198, 244, 50, 0.12);
+  border-color: rgba(var(--accent-rgb), 0.55);
+  box-shadow: 0 0 0 3px rgba(var(--accent-rgb), 0.12);
 }
 
 body.ui-deck .changelog-modal {
@@ -287,7 +292,7 @@ body.ui-deck .workspace {
   height: 28px;
   border-radius: 7px;
   background: var(--accent);
-  color: #0b0d10;
+  color: var(--accent-ink);
 }
 
 .deck-brand-name {
@@ -743,7 +748,7 @@ body.ui-deck .tab.ai-waiting .tab-dot {
 }
 
 body.ui-deck .tab.ai-attention .tab-dot {
-  box-shadow: 0 0 0 3px rgba(198, 244, 50, 0.25);
+  box-shadow: 0 0 0 3px rgba(var(--accent-rgb), 0.25);
 }
 
 body.ui-deck .tab-close {
@@ -791,7 +796,7 @@ body.ui-deck .deck-toggle svg {
 
 body.ui-deck .deck-toggle.toggle-on {
   border-color: var(--accent);
-  background: rgba(198, 244, 50, 0.1);
+  background: rgba(var(--accent-rgb), 0.1);
   color: var(--accent);
 }
 
@@ -1373,7 +1378,7 @@ body.ui-deck .deck-cmd-hint {
 .deck-cli-card.selected {
   border-color: var(--accent);
   background: #1a1f27;
-  box-shadow: 0 0 0 3px rgba(198, 244, 50, 0.12);
+  box-shadow: 0 0 0 3px rgba(var(--accent-rgb), 0.12);
 }
 
 .deck-cli-top {
@@ -1430,7 +1435,7 @@ body.ui-deck .deck-cmd-hint {
 .deck-chip-mode.selected {
   border-color: var(--accent);
   background: var(--accent);
-  color: #0b0d10;
+  color: var(--accent-ink);
   font-weight: 700;
 }
 
@@ -1549,7 +1554,7 @@ body.ui-deck .deck-field input {
   padding: 0 16px;
   border: 0;
   background: var(--accent);
-  color: #0b0d10;
+  color: var(--accent-ink);
   font-weight: 700;
 }
 
@@ -1658,12 +1663,12 @@ body.ui-deck .deck-profiles-form .panel > .section-title {
 body.ui-deck .chat-msg.user .chat-bubble {
   border: 0;
   border-radius: 12px 12px 4px 12px;
-  background: var(--accent);
-  color: #0b0d10;
+  background: var(--bubble-bg);
+  color: var(--bubble-ink);
 }
 
 body.ui-deck .chat-msg.user.command .chat-bubble {
-  color: #0b0d10;
+  color: var(--bubble-ink);
 }
 
 body.ui-deck .chat-msg.assistant .chat-body {
@@ -1801,4 +1806,112 @@ body.ui-deck .chat-view textarea:focus {
   border: 0;
   background: transparent;
   box-shadow: none;
+}
+
+/* --- Theme et couleurs ------------------------------------------------------ */
+.deck-theme-dialog {
+  width: min(600px, 100%);
+}
+
+.deck-theme-label {
+  margin: 14px 0 8px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.deck-theme-label:first-child {
+  margin-top: 0;
+}
+
+.deck-swatches {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.deck-swatch {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 38px;
+  padding: 0 10px;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+}
+
+.deck-swatch.selected {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(var(--accent-rgb), 0.15);
+}
+
+.deck-swatch-dot {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+}
+
+.deck-theme-custom {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 10px;
+  color: var(--text-2);
+  cursor: pointer;
+}
+
+.deck-theme-dialog input[type="color"] {
+  width: 38px;
+  height: 32px;
+  min-height: 0;
+  padding: 2px;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  background: transparent;
+  cursor: pointer;
+}
+
+.deck-theme-dialog input[type="color"].hidden {
+  display: none;
+}
+
+.deck-bubble-choices {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.deck-theme-preview {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--bg);
+}
+
+.deck-theme-preview .deck-chip-mode {
+  display: inline-flex;
+  align-items: center;
+}
+
+.deck-theme-bubble {
+  margin-left: auto;
+  padding: 10px 14px;
+  border-radius: 12px 12px 4px 12px;
+  background: var(--bubble-bg);
+  color: var(--bubble-ink);
+}
+
+.deck-theme-dialog .changelog-actions button {
+  min-height: 38px;
 }

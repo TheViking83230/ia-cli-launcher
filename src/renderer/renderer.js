@@ -7807,6 +7807,7 @@ const CHANGELOG = {
   "0.1.38": [
     "Nouvelle interface « Command Deck » : la liste des sessions à gauche avec leur statut (au travail, attend ta validation, inactive), une palette « Nouvelle session » (Ctrl+T) avec les IA en cartes et l'aperçu de la commande, et toutes les actions au même endroit dans la palette de commandes (Ctrl+K).",
     "En-tête compact (dossier avec dossiers récents, Git, quota, réglages, JARVIS), en-tête de pane avec la commande lancée et le contexte, bandeau quand une IA attend ta validation, notifications discrètes en bas à droite, vue chat en bulles.",
+    "Thèmes de couleurs de la nouvelle interface (Réglages > Thème et couleurs) : 9 couleurs au choix ou une couleur personnalisée, et la couleur des bulles de tes messages dans la vue chat (gris neutre par défaut, couleur du thème ou personnalisée).",
     "Les nouvelles installations démarrent sur la nouvelle interface. Si tu mets à jour, tu gardes l'interface classique et le Launcher te propose d'essayer la nouvelle ; tu peux passer de l'une à l'autre à tout moment dans Réglages > Interface (tes onglets sont rouverts).",
     "Correctif : un onglet Claude fermé avant son premier message affichait « No conversation found » au redémarrage du Launcher. Il repart maintenant sur une conversation neuve."
   ],
