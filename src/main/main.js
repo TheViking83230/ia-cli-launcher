@@ -194,7 +194,10 @@ function saveSessionsToDisk() {
     profileLabel: s.profileLabel,
     modeId: s.modeId,
     modeLabel: s.modeLabel,
-    claudeAccountId: s.claudeAccountId || ""
+    claudeAccountId: s.claudeAccountId || "",
+    // Conversation exacte de l'onglet : reprise precise au redemarrage (deux
+    // onglets dans le meme dossier ne reprennent plus la meme conversation).
+    conversationId: s.conversationId || ""
   }));
   try {
     fs.writeFileSync(getSessionsPath(), JSON.stringify(data, null, 2), "utf8");
@@ -1092,7 +1095,8 @@ function startShellSession(request) {
     profileLabel: request.profileLabel,
     modeId: request.modeId,
     modeLabel: request.modeLabel,
-    claudeAccountId
+    claudeAccountId,
+    conversationId: String(request.conversationId || "")
   });
   addHistoryEntry(sessions.get(id));
   saveSessionsToDisk();
@@ -1464,6 +1468,7 @@ app.whenReady().then(() => {
       modeId: request.modeId,
       modeLabel: request.modeLabel,
       claudeAccountId: request.claudeAccountId,
+      conversationId: request.conversationId,
       cols: request.cols,
       rows: request.rows
     });
@@ -1480,6 +1485,7 @@ app.whenReady().then(() => {
       modeId: request.modeId,
       modeLabel: request.modeLabel,
       claudeAccountId: request.claudeAccountId,
+      conversationId: request.conversationId,
       cols: request.cols,
       rows: request.rows
     });
@@ -1542,6 +1548,7 @@ app.whenReady().then(() => {
   // Etat en direct des IA des onglets : { [id]: { state, runningVersion, ... } }.
   ipcMain.handle("terminal:live-status", async (_event, ids) => {
     const result = {};
+    let changed = false;
     await Promise.all((Array.isArray(ids) ? ids : []).map(async (id) => {
       const session = sessions.get(id);
       if (session) {
@@ -1551,8 +1558,16 @@ app.whenReady().then(() => {
           cwd: session.cwd,
           startedAt: session.startedAt
         });
+        const conversationId = result[id]?.conversationId || "";
+        if (conversationId && conversationId !== session.conversationId) {
+          session.conversationId = conversationId;
+          changed = true;
+        }
       }
     }));
+    if (changed) {
+      saveSessionsToDisk();
+    }
     return result;
   });
 

@@ -4650,3 +4650,8 @@ body.jarvis .tool-menu-list .tool-item:hover:not(:disabled) {
   background: var(--panel-strong);
   color: var(--text);
 }
+
+/* Deux onglets sur la meme conversation Claude : a corriger. */
+.tab.ai-shared {
+  box-shadow: inset 0 -2px 0 var(--warning);
+}

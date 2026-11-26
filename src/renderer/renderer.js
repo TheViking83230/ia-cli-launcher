@@ -693,6 +693,28 @@ function sessionProfileId(session) {
   return session?.spec?.profileId || session?.profileId || "";
 }
 
+function sameFolder(a, b) {
+  const norm = (p) => String(p || "").replace(/[\\/]+$/, "").replace(/\//g, "\\").toLowerCase();
+  return Boolean(a && b) && norm(a) === norm(b);
+}
+
+// Un autre onglet de cette IA est-il deja ouvert dans ce dossier ? Dans ce cas
+// « reprendre la derniere conversation du dossier » (--continue) tomberait sur
+// la sienne : les deux onglets ecriraient dans le meme fil.
+function folderHasOpenTab(profileId, cwd, exceptId = "") {
+  return [...state.sessions.values()].some(
+    (s) => s.id !== exceptId && s.type === "terminal" && sessionProfileId(s) === profileId && sameFolder(s.cwd || s.spec?.cwd, cwd)
+  );
+}
+
+const CONTINUE_ARGS = ["--continue", "-c"];
+function splitArgsLoose(text) {
+  return String(text || "").split(/\s+/).filter(Boolean);
+}
+// Onglets en cours de restauration (lot) : sert a detecter les dossiers
+// partages avant que tous les onglets soient ouverts.
+let restoreBatch = [];
+
 // Temps restant avant reinitialisation, ex. "2 h 05", "3 j 4 h", "12 min".
 function formatResetIn(resetsAt) {
   const ms = resetsAt - Date.now();
@@ -1058,9 +1080,38 @@ async function refreshLiveStatus() {
       session.context = status?.context || null;
       session.conversationId = status?.conversationId || session.conversationId || "";
     }
+    warnSharedConversations(watched);
     updateRestartButton();
   } finally {
     livePollRunning = false;
+  }
+}
+
+// Deux onglets sur la meme conversation (ex. repris dans le meme dossier) :
+// les deux IA ecriraient dans le meme fil. On le signale une fois par paire.
+const sharedConversationWarned = new Set();
+
+function warnSharedConversations(watched) {
+  const byConversation = new Map();
+  for (const session of watched) {
+    if (session.conversationId) {
+      const list = byConversation.get(session.conversationId) || [];
+      list.push(session);
+      byConversation.set(session.conversationId, list);
+    }
+  }
+  for (const [conversationId, list] of byConversation) {
+    for (const session of list) {
+      session.tab.classList.toggle("ai-shared", list.length > 1);
+      session.tab.title = list.length > 1
+        ? `Même conversation que : ${list.filter((s) => s !== session).map((s) => s.title).join(", ")}`
+        : session.tab.title.startsWith("Même conversation") ? "" : session.tab.title;
+    }
+    const key = `${conversationId}|${list.map((s) => s.id).sort().join(",")}`;
+    if (list.length > 1 && !sharedConversationWarned.has(key)) {
+      sharedConversationWarned.add(key);
+      flashStatus(`Attention : les onglets ${list.map((s) => `« ${s.title} »`).join(" et ")} sont sur la MÊME conversation Claude. Ferme l'un d'eux et reprends la bonne conversation (Conversations Claude, Ctrl+Maj+O).`);
+    }
   }
 }
 
@@ -2249,7 +2300,18 @@ async function restoreSession(saved) {
   // Une CLI stocke sa conversation PAR dossier : si on a dû changer de dossier,
   // elle ne peut pas reprendre la session d'origine → on rejoue le transcript
   // sauvegardé et on démarre une CLI fraîche dans le dossier choisi.
-  const useResume = canResume && !cwdChanged;
+  // Conversation exacte connue (onglet Claude ou Codex) : on reprend CELLE-CI,
+  // pas « la derniere du dossier » (deux onglets dans le meme dossier
+  // reprenaient sinon la meme conversation).
+  const exact = !cwdChanged && saved.conversationId ? conversationResume(saved.profileId, saved.conversationId) : null;
+  // Sans identifiant exact, « la derniere du dossier » n'est sure que si cet
+  // onglet est seul dans son dossier ; sinon on rouvre une CLI neuve avec le
+  // texte sauvegarde plutot que de risquer la conversation d'un autre onglet.
+  const folderShared = !exact && (
+    folderHasOpenTab(saved.profileId, cwd) ||
+    restoreBatch.some((other) => other !== saved && other.profileId === saved.profileId && sameFolder(other.cwd, cwd))
+  );
+  const useResume = (Boolean(exact) || (canResume && !folderShared)) && !cwdChanged;
 
   // Si la CLI reprend elle-meme la conversation, inutile de rejouer (doublon).
   // Sinon (ou dossier changé) on rejoue le texte sauvegarde pour voir le fil.
@@ -2289,8 +2351,10 @@ async function restoreSession(saved) {
           modeArgs: mode.args || [],
           preLaunchCommands: mode.preLaunchCommands || [],
           extraArgs: saved.extraArgs || "",
-          resumeArgs: useResume ? (resume?.args || []) : [],
-          resumeReplace: useResume ? Boolean(resume?.replace) : false,
+          resumeArgs: exact ? exact.resumeArgs : useResume ? (resume?.args || []) : [],
+          resumeReplace: exact ? Boolean(exact.resumeReplace) : useResume ? Boolean(resume?.replace) : false,
+          stripArgs: exact?.stripArgs || (folderShared ? CONTINUE_ARGS : []),
+          conversationId: exact ? saved.conversationId : "",
           resumeId: saved.id,
           cwd,
           profileId: saved.profileId,
@@ -2382,8 +2446,13 @@ function renderRestoreSection(savedSessions) {
   restoreAll.textContent = `Tout restaurer (${n})`;
   restoreAll.addEventListener("click", async () => {
     section.remove();
-    for (const saved of savedSessions) {
-      await restoreSession(saved);
+    restoreBatch = savedSessions;
+    try {
+      for (const saved of savedSessions) {
+        await restoreSession(saved);
+      }
+    } finally {
+      restoreBatch = [];
     }
   });
 
@@ -2444,6 +2513,13 @@ async function launchFromProfile({ profileId, modeId, extraArgs, cwd, title, acc
 
   const persona = personaId ? getPersonaById(personaId) : null;
   const finalTitle = title || profile.label;
+  // Mode « Continuer » alors qu'un onglet de cette IA tourne deja dans ce
+  // dossier : il reprendrait SA conversation. On demarre une conversation neuve.
+  const wantsContinue = [...(mode.args || []), ...splitArgsLoose(extraArgs)].some((a) => CONTINUE_ARGS.includes(a));
+  const stripContinue = wantsContinue && folderHasOpenTab(profileId, cwd);
+  if (stripContinue) {
+    flashStatus("Un onglet de cette IA est déjà ouvert dans ce dossier : nouvel onglet sur une conversation neuve (pour reprendre une ancienne, Conversations Claude, Ctrl+Maj+O).");
+  }
   const spec = {
     kind: "profile",
     title: finalTitle,
@@ -2475,6 +2551,7 @@ async function launchFromProfile({ profileId, modeId, extraArgs, cwd, title, acc
         personaPrompt: persona?.prompt || "",
         personaInjection: persona ? profile.personaInjection || null : null,
         claudeAccountId: claudeAccountId || "",
+        stripArgs: stripContinue ? CONTINUE_ARGS : [],
         cols,
         rows
       })
@@ -2879,7 +2956,8 @@ async function restartSession(id) {
     }
 
     const exact = info?.conversationId ? conversationResume(profile.id, info.conversationId) : null;
-    const generic = Array.isArray(profile.resume?.args) && profile.resume.args.length
+    // Pas d'identifiant : « la derniere du dossier » seulement si l'onglet y est seul.
+    const generic = !folderHasOpenTab(profile.id, session.cwd || spec.cwd, session.id) && Array.isArray(profile.resume?.args) && profile.resume.args.length
       ? { resumeArgs: profile.resume.args, resumeReplace: Boolean(profile.resume.replace) }
       : null;
     const plan = exact || generic;
@@ -2925,7 +3003,7 @@ async function restartSession(id) {
         modeLabel: mode.label,
         resumeArgs: plan?.resumeArgs || [],
         resumeReplace: Boolean(plan?.resumeReplace),
-        stripArgs: plan?.stripArgs || [],
+        stripArgs: plan?.stripArgs || (plan ? [] : CONTINUE_ARGS),
         personaPrompt: injectNow ? contextPrompt : "",
         personaInjection: injectNow ? profile.personaInjection || null : null,
         claudeAccountId: spec.claudeAccountId || session.claudeAccountId || "",
@@ -7726,6 +7804,11 @@ async function pollArtifacts() {
 // Notes de version affichees apres une mise a jour. La cle est le numero de
 // version, la valeur la liste des nouveautes a montrer.
 const CHANGELOG = {
+  "0.1.37": [
+    "Correctif : deux onglets ouverts dans le même dossier reprenaient la même conversation Claude au redémarrage du Launcher (les deux IA écrivaient dans le même fil, visible en vue chat). Chaque onglet reprend maintenant sa propre conversation.",
+    "Alerte si deux onglets se retrouvent sur la même conversation : liseré orange sur les onglets et message pour corriger.",
+    "Prévention : le mode « Continuer », le redémarrage de l'IA et la restauration ne reprennent plus « la dernière conversation du dossier » quand un autre onglet travaille déjà dans ce dossier (conversation neuve à la place)."
+  ],
   "0.1.36": [
     "Vue chat (bouton bulle dans l'en-tête ou Ctrl+Maj+K) : la conversation d'un onglet Claude s'affiche comme sur claude.ai, avec bulles, mise en forme, blocs de code copiables et actions de l'IA résumées ; tu écris dans la zone du bas, et quand Claude demande une autorisation, sa question s'affiche avec des touches pour répondre.",
     "Conversations Claude : un bouton « Lire » affiche une ancienne conversation en vue chat, sans la relancer.",
@@ -8042,8 +8125,13 @@ async function init() {
   const autoRestore = isAutoRestoreEnabled();
 
   if (savedSessions && savedSessions.length && autoRestore) {
-    for (const saved of savedSessions) {
-      await restoreSession(saved);
+    restoreBatch = savedSessions;
+    try {
+      for (const saved of savedSessions) {
+        await restoreSession(saved);
+      }
+    } finally {
+      restoreBatch = [];
     }
     showRestoreToast(savedSessions.length);
   } else {
