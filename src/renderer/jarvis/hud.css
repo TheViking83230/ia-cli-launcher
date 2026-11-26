@@ -919,3 +919,21 @@ body.jarvis-hud-focus #appShell {
     animation: none !important;
   }
 }
+
+/* Barre de titre integree : les boutons de la fenetre (en haut a droite) ne
+   doivent pas recouvrir les boutons du HUD (dont ✕ pour quitter JARVIS). */
+body.custom-titlebar .jh2-top {
+  padding-right: calc(100vw - env(titlebar-area-x, 0px) - env(titlebar-area-width, 100vw));
+  -webkit-app-region: drag;
+}
+
+body.custom-titlebar.titlebar-mac .jh2-top {
+  padding-right: 0;
+  padding-left: 72px;
+}
+
+body.custom-titlebar .jh2-top button,
+body.custom-titlebar .jh2-top a,
+body.custom-titlebar .jh2-top input {
+  -webkit-app-region: no-drag;
+}

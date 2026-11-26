@@ -1750,7 +1750,9 @@ function cssColorToHex(value) {
 
 let lastTitleBar = "";
 function syncTitleBar() {
-  const target = isDeckUi() ? document.querySelector(".deck-header") : document.getElementById("appTitlebar");
+  // HUD JARVIS ouvert : les boutons de la fenetre prennent sa couleur.
+  const hud = document.body.classList.contains("jarvis-hud-on") ? document.querySelector(".jh2") : null;
+  const target = hud || (isDeckUi() ? document.querySelector(".deck-header") : document.getElementById("appTitlebar"));
   if (!target || !window.launcher?.setTitleBar) {
     return;
   }
@@ -1760,6 +1762,11 @@ function syncTitleBar() {
     symbolColor: cssColorToHex(getComputedStyle(document.body).getPropertyValue("--muted")) || cssColorToHex(style.color) || "#AEB6C4",
     height: Math.round(target.getBoundingClientRect().height) || 34
   };
+  if (hud) {
+    overlay.color = "#02080F";
+    overlay.symbolColor = "#38E8FF";
+    overlay.height = Math.round(hud.querySelector(".jh2-top")?.getBoundingClientRect().height || 56);
+  }
   const key = JSON.stringify(overlay);
   if (key !== lastTitleBar) {
     lastTitleBar = key;

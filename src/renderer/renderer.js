@@ -7814,6 +7814,9 @@ async function pollArtifacts() {
 // Notes de version affichees apres une mise a jour. La cle est le numero de
 // version, la valeur la liste des nouveautes a montrer.
 const CHANGELOG = {
+  "0.1.41": [
+    "Correctif : impossible de quitter JARVIS depuis la 0.1.39 (le bouton ✕ du HUD était caché sous les boutons de la fenêtre). Le HUD leur laisse maintenant la place, et les boutons de la fenêtre prennent ses couleurs quand il est ouvert."
+  ],
   "0.1.40": [
     "Vue chat : le bouton Modèle ouvre un menu déroulant (Par défaut, Opus, Sonnet, Haiku) au lieu de basculer sur le terminal. Le changement de modèle n'apparaît plus dans la conversation.",
     "Nouvel installateur Windows aux couleurs du logiciel : thème sombre, page d'accueil et page de fin illustrées, barre de progression turquoise, en français."
