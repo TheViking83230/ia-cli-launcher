@@ -718,6 +718,65 @@ function sendClaudeCommand(session, command) {
   window.setTimeout(() => renderChatTools(session), 900);
 }
 
+// Modeles proposes (alias de la commande /model de Claude Code).
+const CLAUDE_MODELS = [
+  { id: "default", label: "Par défaut", hint: "Le modèle recommandé pour ton abonnement" },
+  { id: "opus", label: "Opus", hint: "Le plus capable, pour les tâches complexes" },
+  { id: "sonnet", label: "Sonnet", hint: "Rapide et efficace au quotidien" },
+  { id: "haiku", label: "Haiku", hint: "Le plus rapide, pour les petites tâches" }
+];
+
+// Modele affiche par Claude Code (bandeau de demarrage « Opus 5.5 · Claude Pro »).
+function readClaudeModel(session) {
+  const screen = terminalScreenTail(session, session.terminal?.rows || 40);
+  const match = /\b(Opus|Sonnet|Haiku)\s+\d/i.exec(screen);
+  return match ? match[1].toLowerCase() : "";
+}
+
+function closeModelMenu() {
+  document.querySelectorAll(".chat-model-menu").forEach((node) => node.remove());
+  document.removeEventListener("mousedown", onModelMenuOutside, true);
+}
+
+function onModelMenuOutside(event) {
+  if (!event.target.closest?.(".chat-model-menu, .chat-model-btn")) {
+    closeModelMenu();
+  }
+}
+
+function toggleModelMenu(session, anchor) {
+  if (document.querySelector(".chat-model-menu")) {
+    closeModelMenu();
+    return;
+  }
+  const view = session.chat;
+  const menu = document.createElement("div");
+  menu.className = "chat-model-menu";
+  for (const item of CLAUDE_MODELS) {
+    const option = document.createElement("button");
+    option.type = "button";
+    option.className = `chat-model-option${view?.model === item.id ? " on" : ""}`;
+    option.innerHTML = '<span class="chat-model-name"></span><span class="chat-model-hint"></span>';
+    option.querySelector(".chat-model-name").textContent = item.label;
+    option.querySelector(".chat-model-hint").textContent = item.hint;
+    option.addEventListener("click", () => {
+      closeModelMenu();
+      if (view) {
+        view.model = item.id;
+      }
+      sendClaudeCommand(session, `/model ${item.id}`);
+      flashStatus(`Modèle : ${item.label}`);
+    });
+    menu.appendChild(option);
+  }
+  view.root.appendChild(menu);
+  const box = anchor.getBoundingClientRect();
+  const host = view.root.getBoundingClientRect();
+  menu.style.left = `${Math.max(8, box.left - host.left)}px`;
+  menu.style.bottom = `${host.bottom - box.top + 6}px`;
+  document.addEventListener("mousedown", onModelMenuOutside, true);
+}
+
 function buildChatTools(session) {
   const root = document.createElement("div");
   root.className = "chat-bar";
@@ -766,12 +825,13 @@ function buildChatTools(session) {
     window.launcher.writeTerminal(session.id, "\x1b[Z");
     window.setTimeout(() => renderChatTools(session), 500);
   });
-  tool("cpu", "Modèle", "Choisir le modèle (ouvre le choix dans le terminal)", () => {
-    pasteToSession(session, "/model", true);
-    setChatView(session, false);
-  });
+  const model = tool("cpu", "Modèle", "Choisir le modèle de Claude", (event) => {
+    event.stopPropagation();
+    toggleModelMenu(session, model);
+  }, "chat-model-btn");
+  model.insertAdjacentHTML("beforeend", '<i data-lucide="chevron-up" class="chat-bar-caret"></i>');
   tool("minimize-2", "Compacter", "Résumer la conversation pour libérer du contexte (/compact)", () => sendClaudeCommand(session, "/compact"));
-  return { root, ultra, mode, effortButtons };
+  return { root, ultra, mode, model, effortButtons };
 }
 
 function renderChatTools(session) {
@@ -788,6 +848,12 @@ function renderChatTools(session) {
     button.classList.toggle("on", id === view.effort);
   }
   view.tools.mode.querySelector("span").textContent = mode ? `Mode : ${mode}` : "Mode";
+  const current = readClaudeModel(session);
+  if (current) {
+    view.model = current;
+  }
+  const known = CLAUDE_MODELS.find((item) => item.id === view.model);
+  view.tools.model.querySelector("span").textContent = known ? `Modèle : ${known.label}` : "Modèle";
 }
 
 // Bas de l'ecran du terminal (question ou autorisation affichee par Claude).

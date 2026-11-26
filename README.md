@@ -16,7 +16,7 @@ La conversation d'un onglet Claude s'affiche en bulles, comme sur claude.ai (bou
 
 - **Effort** : Bas, Moyen, Eleve, Tres eleve, Max (commande `/effort`, le niveau actif est surligne ; le changement n'encombre pas la conversation).
 - **Ultracode** : active l'orchestration multi-agents de Claude pour tes demandes (contour arc-en-ciel anime autour de la saisie). Le mot « ultracode » tape dans un message est colore et anime. Attention, ce mode consomme beaucoup plus de quota.
-- **Mode** (normal, editions auto, plan, auto), **Modele** et **Compacter** (`/compact`).
+- **Mode** (normal, editions auto, plan, auto), **Modele** (menu deroulant : Par defaut, Opus, Sonnet, Haiku) et **Compacter** (`/compact`).
 - **Pieces jointes** : colle (Ctrl+V), glisse-depose ou choisis (trombone) des images, des GIF ou des fichiers. Une vignette s'affiche au-dessus de la saisie et part avec le message. Un GIF copie depuis une page web garde son animation.
 
 ### Terminal
@@ -56,7 +56,7 @@ Roue dentee > « Theme et couleurs » : 9 couleurs ou une couleur personnalisee 
 - Ajout de profils CLI personnalises.
 - Glisser-deposer de fichier: le chemin est colle dans le terminal actif (dans la vue chat : ajoute en piece jointe).
 - Copier / coller habituels dans le terminal : Ctrl+C copie, Ctrl+V colle, Ctrl+Maj+C interrompt.
-- Build Windows: installateur NSIS, raccourcis bureau/menu demarrer et execution admin.
+- Build Windows: installateur NSIS aux couleurs du logiciel (theme sombre, en francais ; images generees par `build/installer-art.ps1`), raccourcis bureau/menu demarrer et execution admin.
 - Build Linux: paquet `.deb` (raccourci dans le menu d'applications).
 - Signature Authenticode via certificat PFX, avec option auto-signee pour les tests (Windows).
 

@@ -1,6 +1,6 @@
 {
   "name": "ia-cli-launcher",
-  "version": "0.1.39",
+  "version": "0.1.40",
   "description": "Lanceur Windows admin avec onglets terminal pour CLI IA.",
   "author": "Dev OpA",
   "homepage": "https://devopa.fr",
@@ -149,7 +149,14 @@
       "shortcutName": "IA CLI Launcher",
       "uninstallDisplayName": "IA CLI Launcher",
       "include": "build/installer.nsh",
-      "deleteAppDataOnUninstall": false
+      "deleteAppDataOnUninstall": false,
+      "installerLanguages": [
+        "fr_FR"
+      ],
+      "language": "1036",
+      "installerSidebar": "build/installer-sidebar.bmp",
+      "uninstallerSidebar": "build/installer-sidebar.bmp",
+      "installerHeader": "build/installer-header.bmp"
     }
   }
 }

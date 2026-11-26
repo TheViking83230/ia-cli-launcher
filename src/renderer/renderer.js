@@ -7814,6 +7814,10 @@ async function pollArtifacts() {
 // Notes de version affichees apres une mise a jour. La cle est le numero de
 // version, la valeur la liste des nouveautes a montrer.
 const CHANGELOG = {
+  "0.1.40": [
+    "Vue chat : le bouton Modèle ouvre un menu déroulant (Par défaut, Opus, Sonnet, Haiku) au lieu de basculer sur le terminal. Le changement de modèle n'apparaît plus dans la conversation.",
+    "Nouvel installateur Windows aux couleurs du logiciel : thème sombre, page d'accueil et page de fin illustrées, barre de progression turquoise, en français."
+  ],
   "0.1.39": [
     "Vue chat : barre d'outils sous la saisie pour régler l'effort de Claude (Bas à Max), activer le mode Ultracode (orchestration multi-agents, avec animation), changer de mode ou de modèle et compacter la conversation. Les réglages d'effort n'apparaissent plus dans la conversation.",
     "Le mot « ultracode » tapé dans un message est coloré et animé.",

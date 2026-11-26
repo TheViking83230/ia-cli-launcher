@@ -97,7 +97,7 @@ function commandText(text) {
   return `${name.startsWith("/") ? name : `/${name}`}${args ? ` ${args}` : ""}`;
 }
 
-const HIDDEN_COMMANDS = /^\/effort(\s|$)/i;
+const HIDDEN_COMMANDS = /^\/(effort|model)(\s|$)/i;
 
 function createState() {
   return { offset: 0, rest: "", turns: [], tools: new Map() };
