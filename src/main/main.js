@@ -562,6 +562,11 @@ function createWindow() {
     backgroundColor: "#111318",
     title: "IA CLI Launcher",
     show: false,
+    // Barre de titre aux couleurs du logiciel : l'en-tete de l'app sert de
+    // barre de titre, seuls les boutons de la fenetre restent (colores).
+    ...(process.platform === "darwin"
+      ? { titleBarStyle: "hiddenInset" }
+      : { titleBarStyle: "hidden", titleBarOverlay: { color: "#0B0D10", symbolColor: "#AEB6C4", height: 34 } }),
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),
       contextIsolation: true,
@@ -1665,6 +1670,22 @@ app.whenReady().then(() => {
   });
   // Changement d'interface (nouvelle / classique) : on sauvegarde les onglets
   // puis on relance l'appli, qui les restaure.
+  // Couleurs et hauteur des boutons de la fenetre (suivent l'interface).
+  ipcMain.handle("window:titlebar", (_event, overlay) => {
+    if (process.platform === "darwin" || !mainWindow || mainWindow.isDestroyed()) {
+      return false;
+    }
+    try {
+      mainWindow.setTitleBarOverlay({
+        color: String(overlay?.color || "#0B0D10"),
+        symbolColor: String(overlay?.symbolColor || "#AEB6C4"),
+        height: Math.max(28, Math.min(64, Number(overlay?.height) || 34))
+      });
+      return true;
+    } catch {
+      return false;
+    }
+  });
   ipcMain.handle("app:relaunch", () => {
     try {
       flushAllTranscripts();
@@ -1686,12 +1707,16 @@ app.whenReady().then(() => {
     if (hasSelection) {
       menuItems.push({
         label: "Copier",
+        accelerator: "CommandOrControl+C",
+        registerAccelerator: false,
         click: () => clipboard.writeText(selectedText)
       });
     }
 
     menuItems.push({
       label: "Coller",
+      accelerator: "CommandOrControl+V",
+      registerAccelerator: false,
       click: () => {
         const session = sessions.get(id);
         if (session) {
@@ -1734,6 +1759,19 @@ app.whenReady().then(() => {
   ipcMain.handle("system:open-path", (_event, target) => {
     const file = String(target || "");
     return fs.existsSync(file) ? shell.openPath(file) : "introuvable";
+  });
+
+  ipcMain.handle("clipboard:save-bytes", (_event, { name, bytes, ext }) => {
+    const file = clipboardImage.saveBytes(name, bytes, ext);
+    return file || null;
+  });
+  ipcMain.handle("clipboard:save-url", (_event, url) => clipboardImage.saveFromUrl(url));
+  ipcMain.handle("dialog:choose-files", async () => {
+    const result = await dialog.showOpenDialog(mainWindow, {
+      title: "Joindre des fichiers",
+      properties: ["openFile", "multiSelections"]
+    });
+    return result.canceled ? [] : result.filePaths;
   });
 
   ipcMain.handle("clipboard:save-image", () => {

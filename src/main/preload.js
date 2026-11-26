@@ -104,6 +104,9 @@ contextBridge.exposeInMainWorld("launcher", {
   quotePaths: (paths) => ipcRenderer.invoke("system:quote-paths", paths),
   saveClipboardImage: () => ipcRenderer.invoke("clipboard:save-image"),
   readClipboardFiles: () => ipcRenderer.invoke("clipboard:read-files"),
+  saveAttachmentBytes: (name, bytes, ext) => ipcRenderer.invoke("clipboard:save-bytes", { name, bytes, ext }),
+  saveAttachmentUrl: (url) => ipcRenderer.invoke("clipboard:save-url", url),
+  chooseFiles: () => ipcRenderer.invoke("dialog:choose-files"),
   readClipboardText: () => ipcRenderer.invoke("clipboard:read-text"),
   openPath: (target) => ipcRenderer.invoke("system:open-path", target),
   onPasteAttachments: (handler) => {
@@ -136,6 +139,7 @@ contextBridge.exposeInMainWorld("launcher", {
   checkUpdate: () => ipcRenderer.invoke("update:check"),
   installUpdate: () => ipcRenderer.invoke("update:install"),
   relaunchApp: () => ipcRenderer.invoke("app:relaunch"),
+  setTitleBar: (overlay) => ipcRenderer.invoke("window:titlebar", overlay),
   onUpdateStatus: (handler) => {
     const listener = (_event, payload) => handler(payload);
     ipcRenderer.on("update:status", listener);

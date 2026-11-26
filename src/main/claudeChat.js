@@ -97,6 +97,8 @@ function commandText(text) {
   return `${name.startsWith("/") ? name : `/${name}`}${args ? ` ${args}` : ""}`;
 }
 
+const HIDDEN_COMMANDS = /^\/effort(\s|$)/i;
+
 function createState() {
   return { offset: 0, rest: "", turns: [], tools: new Map() };
 }
@@ -147,9 +149,20 @@ function handleEntry(state, entry) {
       }
       const command = commandText(text);
       if (command) {
+        // Reglages envoyes par la barre d'outils (effort) : visibles dans le
+        // terminal, pas dans la conversation.
+        if (HIDDEN_COMMANDS.test(command)) {
+          state.hideNextOutput = true;
+          return;
+        }
+        state.hideNextOutput = false;
         pushUser(state, command, at, { command: true });
       } else if (text.startsWith("<local-command-stdout>")) {
         const out = text.replace(/<\/?local-command-stdout>/g, "").trim();
+        if (state.hideNextOutput) {
+          state.hideNextOutput = false;
+          return;
+        }
         if (out) {
           state.turns.push({ role: "event", text: out, at });
         }

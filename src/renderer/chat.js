@@ -334,28 +334,67 @@ function ensureChatView(session) {
   const actions = document.createElement("div");
   actions.className = "chat-input-actions";
   actions.innerHTML = `
-    <button type="button" class="chat-btn chat-attach-btn" title="Joindre le contenu du presse-papiers (image, fichiers copiés)"><i data-lucide="paperclip"></i></button>
+    <button type="button" class="chat-btn chat-attach-btn" title="Joindre des fichiers (tu peux aussi coller avec Ctrl+V ou glisser-déposer images, GIF et fichiers)"><i data-lucide="paperclip"></i></button>
     <button type="button" class="chat-btn chat-terminal-btn" title="Revenir au terminal (Ctrl+Maj+K)"><i data-lucide="square-terminal"></i></button>
     <button type="button" class="chat-btn chat-stop-btn hidden" title="Interrompre Claude (Échap)"><i data-lucide="square"></i></button>
     <button type="button" class="chat-btn chat-send-btn" title="Envoyer"><i data-lucide="arrow-up"></i></button>`;
-  box.append(input, actions);
-  composer.append(status, box);
+  // Calque de coloration sous le champ : le mot « ultracode » y est colore et
+  // anime (le texte du champ est transparent, seul le curseur reste visible).
+  const inputWrap = document.createElement("div");
+  inputWrap.className = "chat-input-wrap";
+  const mirror = document.createElement("div");
+  mirror.className = "chat-input-mirror";
+  mirror.setAttribute("aria-hidden", "true");
+  inputWrap.append(mirror, input);
+  box.append(inputWrap, actions);
+  const tools = buildChatTools(session);
+  // Pieces jointes en attente (images, GIF, fichiers) : envoyees avec le message.
+  const attachStrip = document.createElement("div");
+  attachStrip.className = "chat-attachments hidden";
+  composer.append(status, attachStrip, box, tools.root);
   root.append(list, prompt, composer);
   session.container.appendChild(root);
 
-  const view = { root, list, empty, typing, prompt, status, input, rendered: [], version: 0, open: false, timer: null, stickBottom: true };
+  const view = { root, list, empty, typing, prompt, status, input, mirror, box, tools, rendered: [], version: 0, open: false, timer: null, stickBottom: true, ultracode: false, ultraWords: 0, attachStrip, pending: [] };
   session.chat = view;
 
   const autosize = () => {
     input.style.height = "auto";
     input.style.height = `${Math.min(220, input.scrollHeight)}px`;
+    renderUltraMirror(view);
   };
-  const send = () => {
-    const text = input.value.trim();
-    if (!text) {
+  const send = async () => {
+    let text = input.value.trim();
+    const files = view.pending.map((item) => item.path);
+    if (!text && !files.length) {
       return;
     }
-    pasteToSession(session, text, true);
+    // Mode Ultracode : le mot-cle part avec le message (Claude Code active
+    // alors l'orchestration multi-agents pour cette demande).
+    if (text && view.ultracode && !hasUltracode(text)) {
+      text = `ultracode ${text}`;
+    }
+    view.pending = [];
+    renderChatAttachments(session);
+    input.value = "";
+    autosize();
+    // Chaque piece jointe est collee seule (Claude Code la reconnait alors et
+    // affiche [Image #1]), puis le texte part avec Entree.
+    for (const file of files) {
+      const quoted = await window.launcher.quotePaths([file]);
+      if (quoted) {
+        pasteWithTrailingSpace(session, quoted);
+        await new Promise((resolve) => window.setTimeout(resolve, 180));
+      }
+    }
+    if (files.length) {
+      await new Promise((resolve) => window.setTimeout(resolve, 350));
+    }
+    if (text) {
+      pasteToSession(session, text, true);
+    } else {
+      window.launcher.writeTerminal(session.id, "\r");
+    }
     input.value = "";
     autosize();
     view.stickBottom = true;
@@ -364,6 +403,9 @@ function ensureChatView(session) {
     window.setTimeout(() => pollChat(session), 600);
   };
   input.addEventListener("input", autosize);
+  input.addEventListener("scroll", () => {
+    mirror.scrollTop = input.scrollTop;
+  });
   input.addEventListener("keydown", (event) => {
     if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {
       event.preventDefault();
@@ -373,22 +415,69 @@ function ensureChatView(session) {
       window.launcher.writeTerminal(session.id, "\x1b");
     }
   });
-  // Coller une image ou des fichiers copies : comme dans le terminal, leur
-  // chemin est colle dans la CLI et part avec le prochain message.
+  // Coller une image, un GIF ou des fichiers copies : ajoutes en pieces
+  // jointes (apercu au-dessus de la saisie), envoyes avec le message.
   input.addEventListener("paste", (event) => {
-    const hasText = Boolean(event.clipboardData?.getData("text/plain"));
-    if (!hasText) {
+    const data = event.clipboardData;
+    const hasText = Boolean(data?.getData("text/plain"));
+    const hasFiles = Boolean(data?.files?.length);
+    if (hasText && !hasFiles) {
+      return;
+    }
+    event.preventDefault();
+    collectTransfer(data, true).then((paths) => {
+      if (paths.length) {
+        addChatAttachments(session, paths);
+      } else if (hasText) {
+        document.execCommand("insertText", false, data.getData("text/plain"));
+      } else {
+        flashStatus("Rien à joindre dans le presse-papiers.");
+      }
+    });
+  });
+  // Glisser-deposer des fichiers ou une image depuis une page web.
+  let dragDepth = 0;
+  root.addEventListener("dragenter", (event) => {
+    if (isFileDrag(event)) {
       event.preventDefault();
-      pasteClipboardAttachments(session).then((ok) => {
-        if (!ok) {
-          flashStatus("Rien à joindre dans le presse-papiers.");
-        }
-      });
+      dragDepth += 1;
+      root.classList.add("chat-dropping");
     }
   });
+  root.addEventListener("dragover", (event) => {
+    if (isFileDrag(event)) {
+      event.preventDefault();
+      event.dataTransfer.dropEffect = "copy";
+    }
+  });
+  root.addEventListener("dragleave", () => {
+    dragDepth = Math.max(0, dragDepth - 1);
+    if (!dragDepth) {
+      root.classList.remove("chat-dropping");
+    }
+  });
+  root.addEventListener("drop", (event) => {
+    if (!isFileDrag(event)) {
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    dragDepth = 0;
+    root.classList.remove("chat-dropping");
+    collectTransfer(event.dataTransfer, false).then((paths) => {
+      if (paths.length) {
+        addChatAttachments(session, paths);
+      } else {
+        flashStatus("Impossible de joindre cet élément.");
+      }
+    });
+  });
   actions.querySelector(".chat-send-btn").addEventListener("click", send);
-  actions.querySelector(".chat-attach-btn").addEventListener("click", () => {
-    pasteClipboardAttachments(session).then((ok) => flashStatus(ok ? "Pièce jointe ajoutée au prochain message." : "Copie d'abord une image ou des fichiers."));
+  actions.querySelector(".chat-attach-btn").addEventListener("click", async () => {
+    const paths = await window.launcher.chooseFiles();
+    if (paths?.length) {
+      addChatAttachments(session, paths);
+    }
   });
   actions.querySelector(".chat-terminal-btn").addEventListener("click", () => setChatView(session, false));
   actions.querySelector(".chat-stop-btn").addEventListener("click", () => window.launcher.writeTerminal(session.id, "\x1b"));
@@ -403,6 +492,302 @@ function ensureChatView(session) {
   });
   createIcons();
   return view;
+}
+
+// --- Pieces jointes de la vue chat ------------------------------------------------
+const MIME_EXT = { "image/png": "png", "image/jpeg": "jpg", "image/gif": "gif", "image/webp": "webp", "image/bmp": "bmp", "image/svg+xml": "svg", "application/pdf": "pdf", "text/plain": "txt" };
+
+function isFileDrag(event) {
+  const types = Array.from(event.dataTransfer?.types || []);
+  return types.includes("Files") || types.includes("text/uri-list");
+}
+
+// Premiere image d'un extrait HTML (image copiee ou glissee depuis une page).
+function imageUrlFromHtml(html) {
+  const src = /<img[^>]+src=["']([^"']+)["']/i.exec(String(html || ""))?.[1] || "";
+  return /^https?:/i.test(src) ? src.replace(/&amp;/g, "&") : "";
+}
+
+// Chemins des elements colles ou deposes : fichiers du disque tels quels,
+// images sans fichier (capture, image web) enregistrees en temporaire. Un GIF
+// venu d'une page est retelecharge pour garder son animation.
+async function collectTransfer(data, fromClipboard) {
+  const paths = [];
+  if (!data) {
+    return paths;
+  }
+  const html = data.getData?.("text/html") || "";
+  const uri = (data.getData?.("text/uri-list") || "").split(/\r?\n/).find((line) => /^https?:/i.test(line)) || "";
+  const webImage = imageUrlFromHtml(html) || (/\.(gif|png|jpe?g|webp|bmp|svg)(\?|$)/i.test(uri) ? uri : "");
+  const files = Array.from(data.files || []);
+  const blobs = [];
+  for (const file of files) {
+    const onDisk = window.launcher.getPathForFile(file);
+    if (onDisk) {
+      paths.push(onDisk);
+    } else {
+      blobs.push(file);
+    }
+  }
+  if (!paths.length && webImage && (/\.gif(\?|$)/i.test(webImage) || !blobs.length)) {
+    const saved = await window.launcher.saveAttachmentUrl(webImage);
+    if (saved) {
+      return [saved];
+    }
+  }
+  for (const file of blobs) {
+    const bytes = new Uint8Array(await file.arrayBuffer());
+    const saved = await window.launcher.saveAttachmentBytes(file.name || "image", bytes, MIME_EXT[file.type] || "bin");
+    if (saved) {
+      paths.push(saved);
+    }
+  }
+  if (!paths.length && fromClipboard) {
+    // Fichiers copies dans l'Explorateur (absents de l'evenement sous Windows),
+    // sinon image du presse-papiers.
+    const copied = await window.launcher.readClipboardFiles();
+    if (copied.length) {
+      return copied;
+    }
+    const image = await window.launcher.saveClipboardImage();
+    if (image?.path) {
+      return [image.path];
+    }
+  }
+  return paths;
+}
+
+function addChatAttachments(session, paths) {
+  const view = session.chat;
+  if (!view) {
+    return;
+  }
+  const known = new Set(view.pending.map((item) => item.path));
+  for (const item of paths) {
+    if (item && !known.has(item)) {
+      known.add(item);
+      view.pending.push({ path: item, name: String(item).split(/[\\/]/).pop() });
+    }
+  }
+  renderChatAttachments(session);
+  view.input.focus();
+}
+
+function renderChatAttachments(session) {
+  const view = session.chat;
+  const strip = view?.attachStrip;
+  if (!strip) {
+    return;
+  }
+  strip.innerHTML = "";
+  strip.classList.toggle("hidden", !view.pending.length);
+  for (const item of view.pending) {
+    const chip = document.createElement("div");
+    chip.className = "chat-attach-chip";
+    chip.title = `${item.path}\nClic : ouvrir`;
+    if (IMAGE_FILE.test(item.name)) {
+      chip.classList.add("is-image");
+      const img = document.createElement("img");
+      img.src = fileUrl(item.path);
+      img.alt = "";
+      chip.appendChild(img);
+    } else {
+      const icon = document.createElement("span");
+      icon.className = "chat-attach-icon";
+      icon.innerHTML = '<i data-lucide="file-text"></i>';
+      const name = document.createElement("span");
+      name.className = "chat-attach-name";
+      name.textContent = item.name;
+      chip.append(icon, name);
+    }
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "chat-attach-remove";
+    remove.title = "Retirer";
+    remove.textContent = "×";
+    remove.addEventListener("click", (event) => {
+      event.stopPropagation();
+      view.pending = view.pending.filter((other) => other !== item);
+      renderChatAttachments(session);
+    });
+    chip.appendChild(remove);
+    chip.addEventListener("click", () => window.launcher.openPath(item.path));
+    strip.appendChild(chip);
+  }
+  createIcons();
+}
+
+// --- Mot-cle « ultracode » et barre d'outils sous la saisie ---------------------
+const ULTRACODE_RE = /\bultracode\b/gi;
+const EFFORT_LEVELS = [
+  ["low", "Bas"],
+  ["medium", "Moyen"],
+  ["high", "Élevé"],
+  ["xhigh", "Très élevé"],
+  ["max", "Max"]
+];
+
+function hasUltracode(text) {
+  return /\bultracode\b/i.test(String(text || ""));
+}
+
+function escapeChatHtml(text) {
+  return String(text).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
+}
+
+function renderUltraMirror(view) {
+  const text = view.input.value;
+  const count = (text.match(ULTRACODE_RE) || []).length;
+  // Un caractere invisible en fin de texte garde la meme hauteur que le champ.
+  view.mirror.innerHTML = `${escapeChatHtml(text).replace(ULTRACODE_RE, (word) => `<span class="ultracode-word">${word}</span>`)}​`;
+  view.mirror.scrollTop = view.input.scrollTop;
+  if (count > view.ultraWords) {
+    playUltracodeBurst(view, "Ultracode");
+  }
+  view.ultraWords = count;
+}
+
+// Petite animation : contour qui tourne autour de la saisie, etincelles et
+// etiquette qui s'envole.
+function playUltracodeBurst(view, label) {
+  const box = view.box;
+  box.classList.remove("ultra-burst");
+  void box.offsetWidth;
+  box.classList.add("ultra-burst");
+  window.clearTimeout(view.burstTimer);
+  view.burstTimer = window.setTimeout(() => box.classList.remove("ultra-burst"), 1400);
+  box.querySelectorAll(".ultra-tag").forEach((node) => node.remove());
+  const tag = document.createElement("span");
+  tag.className = "ultra-tag";
+  tag.textContent = `✦ ${label}`;
+  box.appendChild(tag);
+  for (let i = 0; i < 10; i += 1) {
+    const spark = document.createElement("span");
+    spark.className = "ultra-spark";
+    spark.style.left = `${6 + i * 9.5}%`;
+    spark.style.setProperty("--dx", `${(i % 2 ? 1 : -1) * (6 + ((i * 7) % 18))}px`);
+    spark.style.animationDelay = `${(i % 5) * 60}ms`;
+    box.appendChild(spark);
+    window.setTimeout(() => spark.remove(), 1300);
+  }
+  window.setTimeout(() => tag.remove(), 1400);
+}
+
+function setUltracode(session, on) {
+  const view = session.chat;
+  if (!view) {
+    return;
+  }
+  view.ultracode = on;
+  view.box.classList.toggle("ultra-on", on);
+  view.tools.ultra.classList.toggle("on", on);
+  view.tools.ultra.setAttribute("aria-pressed", String(on));
+  view.input.placeholder = on
+    ? "Ultracode activé : ta demande sera traitée par plusieurs agents…"
+    : "Écris à Claude…  (Entrée pour envoyer, Maj+Entrée pour aller à la ligne)";
+  if (on) {
+    playUltracodeBurst(view, "Ultracode activé");
+  }
+  view.input.focus();
+}
+
+// Etat affiche par Claude Code en bas de son ecran (« ◐ medium · /effort »,
+// « ⏵⏵ auto mode on »).
+function readClaudeFooter(session) {
+  const tail = terminalScreenTail(session, 14);
+  const effort = /\b(low|medium|high|xhigh|max)\s*·\s*\/effort/i.exec(tail)?.[1]?.toLowerCase() || "";
+  let mode = "";
+  if (/plan mode on/i.test(tail)) {
+    mode = "Plan";
+  } else if (/auto mode on/i.test(tail)) {
+    mode = "Auto";
+  } else if (/accept edits on/i.test(tail)) {
+    mode = "Éditions auto";
+  } else if (/bypass(ing)? permissions/i.test(tail)) {
+    mode = "Accès total";
+  }
+  return { effort, mode };
+}
+
+function sendClaudeCommand(session, command) {
+  pasteToSession(session, command, true);
+  if (session.chat) {
+    session.chat.sentAt = Date.now();
+    renderChatStatus(session);
+  }
+  window.setTimeout(() => renderChatTools(session), 900);
+}
+
+function buildChatTools(session) {
+  const root = document.createElement("div");
+  root.className = "chat-bar";
+
+  const effort = document.createElement("div");
+  effort.className = "chat-effort";
+  effort.title = "Effort de réflexion de Claude (commande /effort)";
+  const effortLabel = document.createElement("span");
+  effortLabel.className = "chat-bar-label";
+  effortLabel.textContent = "Effort";
+  effort.appendChild(effortLabel);
+  const effortButtons = {};
+  for (const [id, label] of EFFORT_LEVELS) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "chat-effort-btn";
+    button.dataset.level = id;
+    button.textContent = label;
+    button.title = `/effort ${id}`;
+    button.addEventListener("click", () => {
+      if (session.chat) {
+        session.chat.effort = id;
+      }
+      sendClaudeCommand(session, `/effort ${id}`);
+    });
+    effort.appendChild(button);
+    effortButtons[id] = button;
+  }
+  root.appendChild(effort);
+
+  const tool = (icon, label, title, onClick, extra = "") => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = `chat-bar-btn ${extra}`.trim();
+    button.title = title;
+    button.innerHTML = `<i data-lucide="${icon}"></i><span></span>`;
+    button.querySelector("span").textContent = label;
+    button.addEventListener("click", onClick);
+    root.appendChild(button);
+    return button;
+  };
+
+  const ultra = tool("sparkles", "Ultracode", "Ultracode : Claude orchestre plusieurs agents pour tes demandes (plus complet, mais consomme beaucoup plus de quota)", () => setUltracode(session, !session.chat?.ultracode), "chat-ultra");
+  ultra.setAttribute("aria-pressed", "false");
+  const mode = tool("shield", "Mode", "Changer de mode de permission (Maj+Tab dans Claude Code : normal, éditions auto, plan, auto)", () => {
+    window.launcher.writeTerminal(session.id, "\x1b[Z");
+    window.setTimeout(() => renderChatTools(session), 500);
+  });
+  tool("cpu", "Modèle", "Choisir le modèle (ouvre le choix dans le terminal)", () => {
+    pasteToSession(session, "/model", true);
+    setChatView(session, false);
+  });
+  tool("minimize-2", "Compacter", "Résumer la conversation pour libérer du contexte (/compact)", () => sendClaudeCommand(session, "/compact"));
+  return { root, ultra, mode, effortButtons };
+}
+
+function renderChatTools(session) {
+  const view = session.chat;
+  if (!view?.tools) {
+    return;
+  }
+  const { effort, mode } = readClaudeFooter(session);
+  // Claude Code n'affiche pas toujours l'effort : on garde le dernier connu.
+  if (effort) {
+    view.effort = effort;
+  }
+  for (const [id, button] of Object.entries(view.tools.effortButtons)) {
+    button.classList.toggle("on", id === view.effort);
+  }
+  view.tools.mode.querySelector("span").textContent = mode ? `Mode : ${mode}` : "Mode";
 }
 
 // Bas de l'ecran du terminal (question ou autorisation affichee par Claude).
@@ -440,6 +825,9 @@ function renderChatStatus(session) {
   if (!view) {
     return;
   }
+  try {
+    renderChatTools(session);
+  } catch {}
   const busy = session.aiState === "busy" || (view.sentAt && Date.now() - view.sentAt < 4000 && session.aiState !== "waiting");
   view.typing.classList.toggle("hidden", !busy);
   view.root.querySelector(".chat-stop-btn").classList.toggle("hidden", !busy);

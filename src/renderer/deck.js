@@ -1722,3 +1722,51 @@ if (isDeckUi()) {
   rememberFolder(readStorage("lastFolder"));
   scheduleDeckRefresh();
 }
+
+// --- Barre de titre aux couleurs du logiciel ---------------------------------
+// La barre Windows est masquee : l'en-tete de l'interface (ou la fine barre de
+// l'interface classique) sert de barre de titre, et les boutons de la fenetre
+// prennent sa couleur.
+const IS_MAC = /mac/i.test(navigator.platform || "");
+document.body.classList.add("custom-titlebar", isDeckUi() ? "titlebar-deck" : "titlebar-classic");
+if (IS_MAC) {
+  document.body.classList.add("titlebar-mac");
+}
+
+function cssColorToHex(value) {
+  const text = String(value || "").trim();
+  if (/^#[0-9a-f]{6}$/i.test(text)) {
+    return text;
+  }
+  if (/^#[0-9a-f]{3}$/i.test(text)) {
+    return `#${[...text.slice(1)].map((c) => c + c).join("")}`;
+  }
+  const parts = String(value || "").match(/[\d.]+/g);
+  if (!parts || parts.length < 3) {
+    return "";
+  }
+  return `#${parts.slice(0, 3).map((n) => Math.round(Number(n)).toString(16).padStart(2, "0")).join("")}`;
+}
+
+let lastTitleBar = "";
+function syncTitleBar() {
+  const target = isDeckUi() ? document.querySelector(".deck-header") : document.getElementById("appTitlebar");
+  if (!target || !window.launcher?.setTitleBar) {
+    return;
+  }
+  const style = getComputedStyle(target);
+  const overlay = {
+    color: cssColorToHex(style.backgroundColor) || "#0B0D10",
+    symbolColor: cssColorToHex(getComputedStyle(document.body).getPropertyValue("--muted")) || cssColorToHex(style.color) || "#AEB6C4",
+    height: Math.round(target.getBoundingClientRect().height) || 34
+  };
+  const key = JSON.stringify(overlay);
+  if (key !== lastTitleBar) {
+    lastTitleBar = key;
+    window.launcher.setTitleBar(overlay);
+  }
+}
+
+// Mode JARVIS, theme... : la couleur des boutons suit.
+new MutationObserver(() => window.requestAnimationFrame(syncTitleBar)).observe(document.body, { attributes: true, attributeFilter: ["class", "style"] });
+window.requestAnimationFrame(syncTitleBar);

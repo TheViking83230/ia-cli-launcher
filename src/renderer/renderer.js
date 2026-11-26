@@ -2235,10 +2235,20 @@ async function openTerminalSession({ title, accent, starter, replayText, spec })
     if (event.key === "Enter" && !event.shiftKey && !event.altKey && !event.ctrlKey) {
       clearAttachments(session);
     }
-    if (event.ctrlKey && event.shiftKey && event.key === "C") {
+    // Ctrl+C copie, comme partout : il n'interrompt plus jamais la CLI.
+    // Pour interrompre : Ctrl+Maj+C (ou Echap dans Claude Code).
+    if (event.ctrlKey && !event.altKey && !event.metaKey && event.key.toLowerCase() === "c") {
+      event.preventDefault();
+      if (event.shiftKey) {
+        window.launcher.writeTerminal(session.id, "\x03");
+        flashStatus("Interruption envoyée (Ctrl+Maj+C)");
+        return false;
+      }
       const selected = terminal.getSelection();
       if (selected) {
         navigator.clipboard.writeText(selected);
+        terminal.clearSelection();
+        flashStatus("Copié");
       }
       return false;
     }
@@ -7804,6 +7814,13 @@ async function pollArtifacts() {
 // Notes de version affichees apres une mise a jour. La cle est le numero de
 // version, la valeur la liste des nouveautes a montrer.
 const CHANGELOG = {
+  "0.1.39": [
+    "Vue chat : barre d'outils sous la saisie pour régler l'effort de Claude (Bas à Max), activer le mode Ultracode (orchestration multi-agents, avec animation), changer de mode ou de modèle et compacter la conversation. Les réglages d'effort n'apparaissent plus dans la conversation.",
+    "Le mot « ultracode » tapé dans un message est coloré et animé.",
+    "Vue chat : colle (Ctrl+V), glisse-dépose ou choisis (trombone) des images, des GIF et des fichiers ; une vignette s'affiche au-dessus de la saisie et part avec le message. Un GIF copié depuis une page web garde son animation.",
+    "Terminal : Ctrl+C copie et Ctrl+V colle, comme partout. Ctrl+C n'interrompt plus la CLI : pour interrompre, Ctrl+Maj+C (ou Échap dans Claude Code).",
+    "Barre de titre aux couleurs du logiciel : la barre Windows et son menu disparaissent, l'en-tête sert de barre de titre et les boutons de la fenêtre prennent la couleur de l'interface."
+  ],
   "0.1.38": [
     "Nouvelle interface « Command Deck » : la liste des sessions à gauche avec leur statut (au travail, attend ta validation, inactive), une palette « Nouvelle session » (Ctrl+T) avec les IA en cartes et l'aperçu de la commande, et toutes les actions au même endroit dans la palette de commandes (Ctrl+K).",
     "En-tête compact (dossier avec dossiers récents, Git, quota, réglages, JARVIS), en-tête de pane avec la commande lancée et le contexte, bandeau quand une IA attend ta validation, notifications discrètes en bas à droite, vue chat en bulles.",

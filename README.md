@@ -4,6 +4,41 @@ Application Windows et Linux pour lancer des CLI IA dans des onglets terminal no
 
 Le code source est unique : les deux versions evoluent ensemble. Une couche d'abstraction (`src/main/platform.js`) isole les differences entre systemes (shell, quoting, detection de commande, droits eleves).
 
+## Apercu
+
+> Captures realisees avec des projets fictifs (dossier de demonstration).
+
+### Vue chat
+
+![Vue chat d'un onglet Claude](docs/screenshots/vue-chat.png)
+
+La conversation d'un onglet Claude s'affiche en bulles, comme sur claude.ai (bouton `Chat` ou Ctrl+Maj+K). Sous la zone de saisie :
+
+- **Effort** : Bas, Moyen, Eleve, Tres eleve, Max (commande `/effort`, le niveau actif est surligne ; le changement n'encombre pas la conversation).
+- **Ultracode** : active l'orchestration multi-agents de Claude pour tes demandes (contour arc-en-ciel anime autour de la saisie). Le mot « ultracode » tape dans un message est colore et anime. Attention, ce mode consomme beaucoup plus de quota.
+- **Mode** (normal, editions auto, plan, auto), **Modele** et **Compacter** (`/compact`).
+- **Pieces jointes** : colle (Ctrl+V), glisse-depose ou choisis (trombone) des images, des GIF ou des fichiers. Une vignette s'affiche au-dessus de la saisie et part avec le message. Un GIF copie depuis une page web garde son animation.
+
+### Terminal
+
+![Session Claude Code dans le terminal](docs/screenshots/terminal.png)
+
+Chaque session tourne dans un vrai terminal, avec la liste des sessions et leur statut a gauche, les onglets en haut et le quota Claude dans l'en-tete. L'en-tete sert de barre de titre : plus de barre Windows, les boutons de la fenetre prennent les couleurs du logiciel.
+
+Raccourcis du terminal : **Ctrl+C copie** la selection (il n'interrompt plus la CLI), **Ctrl+V colle** (texte, images ou fichiers copies), **Ctrl+Maj+C interrompt** la CLI.
+
+### Nouvelle session (Ctrl+T)
+
+![Palette Nouvelle session](docs/screenshots/nouvelle-session.png)
+
+Choix de l'IA en cartes (avec son etat : connectee, sans token, non installee), du mode, du dossier, du compte Claude, de la persona et des arguments, avec l'apercu de la commande lancee.
+
+### Theme et couleurs
+
+![Theme et couleurs](docs/screenshots/themes.png)
+
+Roue dentee > « Theme et couleurs » : 9 couleurs ou une couleur personnalisee pour l'interface, et la couleur des bulles de tes messages dans la vue chat.
+
 ## Fonctions
 
 - Deux interfaces au choix (Reglages > Interface) : la nouvelle interface « Command Deck » (par defaut pour une nouvelle installation) et l'interface classique (conservee lors d'une mise a jour, avec une proposition d'essayer la nouvelle).
@@ -19,7 +54,8 @@ Le code source est unique : les deux versions evoluent ensemble. Une couche d'ab
 - Bouton d'installation par profil, lance dans un onglet terminal.
 - Modes configurables par profil, dont les modes grant access quand ils sont documentes par le CLI.
 - Ajout de profils CLI personnalises.
-- Glisser-deposer de fichier: le chemin est colle dans le terminal actif.
+- Glisser-deposer de fichier: le chemin est colle dans le terminal actif (dans la vue chat : ajoute en piece jointe).
+- Copier / coller habituels dans le terminal : Ctrl+C copie, Ctrl+V colle, Ctrl+Maj+C interrompt.
 - Build Windows: installateur NSIS, raccourcis bureau/menu demarrer et execution admin.
 - Build Linux: paquet `.deb` (raccourci dans le menu d'applications).
 - Signature Authenticode via certificat PFX, avec option auto-signee pour les tests (Windows).

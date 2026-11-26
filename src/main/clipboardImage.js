@@ -74,4 +74,61 @@ function readClipboardFiles() {
   return Promise.resolve(paths);
 }
 
-module.exports = { pruneOldImages, saveClipboardImage, readClipboardFiles };
+// Fichier colle ou depose sans chemin sur le disque (image copiee depuis un
+// navigateur, GIF...) : enregistre dans le dossier temporaire des images.
+function safeName(name, fallbackExt) {
+  const base = path.basename(String(name || "")).replace(/[<>:"/\\|?*\u0000-\u001f]/g, "_").slice(-80);
+  const ext = path.extname(base) ? "" : `.${fallbackExt || "bin"}`;
+  const stamp = new Date().toISOString().replace(/[-:]/g, "").replace("T", "-").slice(0, 15);
+  return `${stamp}-${Math.random().toString(36).slice(2, 6)}-${base || "fichier"}${ext}`;
+}
+
+const MAX_BYTES = 30 * 1024 * 1024;
+
+function saveBytes(name, bytes, fallbackExt) {
+  const buffer = Buffer.from(bytes || []);
+  if (!buffer.length || buffer.length > MAX_BYTES) {
+    return null;
+  }
+  fs.mkdirSync(IMAGE_DIR, { recursive: true });
+  const file = path.join(IMAGE_DIR, safeName(name, fallbackExt));
+  fs.writeFileSync(file, buffer);
+  return file;
+}
+
+const TYPE_EXT = { "image/gif": "gif", "image/png": "png", "image/jpeg": "jpg", "image/webp": "webp", "image/svg+xml": "svg", "image/bmp": "bmp" };
+
+// Image copiee ou glissee depuis une page web : on telecharge l'original (un
+// GIF garde ainsi son animation, le presse-papiers n'en garde qu'une image fixe).
+async function saveFromUrl(url) {
+  let target;
+  try {
+    target = new URL(String(url || ""));
+  } catch {
+    return null;
+  }
+  if (!/^https?:$/.test(target.protocol)) {
+    return null;
+  }
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 20000);
+  try {
+    const response = await fetch(target, { signal: controller.signal });
+    if (!response.ok) {
+      return null;
+    }
+    const type = String(response.headers.get("content-type") || "").split(";")[0].trim().toLowerCase();
+    if (!type.startsWith("image/") && !type.startsWith("video/")) {
+      return null;
+    }
+    const bytes = Buffer.from(await response.arrayBuffer());
+    const name = decodeURIComponent(target.pathname.split("/").pop() || "image");
+    return saveBytes(name, bytes, TYPE_EXT[type] || type.split("/")[1]);
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+module.exports = { pruneOldImages, saveClipboardImage, readClipboardFiles, saveBytes, saveFromUrl };
