@@ -6,6 +6,7 @@
     <title>IA CLI Launcher</title>
     <link rel="stylesheet" href="../../node_modules/@xterm/xterm/css/xterm.css" />
     <link rel="stylesheet" href="./styles.css" />
+    <link rel="stylesheet" href="./deck.css" />
     <link rel="stylesheet" href="./jarvis/hud.css" />
   </head>
   <body>
@@ -260,6 +261,9 @@
                   <button id="syncButton" class="icon-button tool-item" data-label="Synchronisation" type="button" title="Synchronisation des données">
                     <i data-lucide="refresh-cw"></i>
                   </button>
+                  <button id="uiModeButton" class="icon-button tool-item" data-label="Interface" type="button" title="Interface : nouvelle (Command Deck) ou classique">
+                    <i data-lucide="layout-dashboard"></i>
+                  </button>
                 </div>
               </div>
             </div>
@@ -345,5 +349,6 @@
     <script src="./chat.js"></script>
     <script src="./accounts.js"></script>
     <script src="./renderer.js"></script>
+    <script src="./deck.js"></script>
   </body>
 </html>

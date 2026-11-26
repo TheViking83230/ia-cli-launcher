@@ -1428,7 +1428,19 @@ app.whenReady().then(() => {
     const stripArgs = new Set(splitArgs(request.stripArgs));
     const modeArgs = splitArgs(request.modeArgs).filter((arg) => !stripArgs.has(arg));
     const extraArgs = splitArgs(request.extraArgs).filter((arg) => !stripArgs.has(arg));
-    const resumeArgs = splitArgs(request.resumeArgs);
+    let resumeArgs = splitArgs(request.resumeArgs);
+    let conversationId = request.conversationId;
+    // Reprise d'une conversation Claude precise : si l'onglet a ete ferme avant
+    // le premier message, Claude n'a jamais ecrit la conversation et
+    // « --resume <id> » echouerait (« No conversation found »). On demarre
+    // alors une conversation neuve.
+    if (request.profileId === "claude" && resumeArgs[0] === "--resume" && resumeArgs[1]) {
+      const file = conversation.claudeConversationFile(resumeArgs[1], String(request.cwd || ""));
+      if (!file) {
+        resumeArgs = [];
+        conversationId = "";
+      }
+    }
     const preLaunchCommands = Array.isArray(request.preLaunchCommands) ? request.preLaunchCommands : [];
 
     // Reprise de conversation :
@@ -1468,7 +1480,7 @@ app.whenReady().then(() => {
       modeId: request.modeId,
       modeLabel: request.modeLabel,
       claudeAccountId: request.claudeAccountId,
-      conversationId: request.conversationId,
+      conversationId,
       cols: request.cols,
       rows: request.rows
     });
@@ -1650,6 +1662,16 @@ app.whenReady().then(() => {
     }
     autoUpdater.checkForUpdates().catch(() => {});
     return { ok: true };
+  });
+  // Changement d'interface (nouvelle / classique) : on sauvegarde les onglets
+  // puis on relance l'appli, qui les restaure.
+  ipcMain.handle("app:relaunch", () => {
+    try {
+      flushAllTranscripts();
+      saveSessionsToDisk();
+    } catch {}
+    setTimeout(relaunchApp, 250);
+    return true;
   });
   ipcMain.handle("update:install", () => {
     // Quitte et installe la mise a jour deja telechargee.

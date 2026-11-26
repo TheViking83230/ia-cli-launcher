@@ -135,6 +135,7 @@ contextBridge.exposeInMainWorld("launcher", {
   },
   checkUpdate: () => ipcRenderer.invoke("update:check"),
   installUpdate: () => ipcRenderer.invoke("update:install"),
+  relaunchApp: () => ipcRenderer.invoke("app:relaunch"),
   onUpdateStatus: (handler) => {
     const listener = (_event, payload) => handler(payload);
     ipcRenderer.on("update:status", listener);

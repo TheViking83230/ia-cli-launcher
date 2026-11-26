@@ -6,6 +6,8 @@ Le code source est unique : les deux versions evoluent ensemble. Une couche d'ab
 
 ## Fonctions
 
+- Deux interfaces au choix (Reglages > Interface) : la nouvelle interface « Command Deck » (par defaut pour une nouvelle installation) et l'interface classique (conservee lors d'une mise a jour, avec une proposition d'essayer la nouvelle).
+- Command Deck : liste des sessions avec leur statut (au travail / attend ta validation / inactive), palette « Nouvelle session » (Ctrl+T), palette de commandes (Ctrl+K) regroupant toutes les actions, en-tete compact (dossier et dossiers recents, Git, quota, reglages, JARVIS), bandeau de validation et notifications.
 - Onglets terminal integres avec titre modifiable.
 - Choix du dossier de lancement avant chaque session.
 - Menu gauche retractable pour garder seulement les onglets et le terminal visibles.
