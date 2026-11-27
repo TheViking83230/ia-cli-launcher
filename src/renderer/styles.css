@@ -5189,3 +5189,20 @@ body.ui-deck .chat-model-menu {
 body.ui-deck .chat-model-option.on {
   box-shadow: inset 3px 0 0 var(--accent);
 }
+
+/* Fenetre de saisie (renommer un onglet, un compte...) */
+.ask-text-dialog { width: min(420px, calc(100vw - 32px)); }
+.ask-text-input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: rgba(0, 0, 0, 0.25);
+  color: inherit;
+  font: inherit;
+  font-size: 14px;
+  outline: none;
+}
+.ask-text-input:focus { border-color: var(--accent, #2dd4bf); box-shadow: 0 0 0 3px rgba(45, 212, 191, 0.18); }
+.ask-text-dialog .changelog-actions { display: flex; gap: 8px; justify-content: flex-end; }

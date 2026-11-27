@@ -417,15 +417,14 @@ function openRelayPopover(anchor = deck.el.relayButton) {
     deckToast("Aucune session IA active pour passer le relais.");
     return;
   }
-  const currentId = sessionProfileId(session);
   openDeckPopover(anchor, (pop) => {
     popTitle(pop, `Passer « ${session.title} » à…`);
-    for (const profile of sortProfiles(state.config.profiles)) {
-      if (profile.id === currentId || authOf(profile.id).key === "off") {
+    for (const target of relayTargets(session)) {
+      if (!target.accountId && authOf(target.profile.id).key === "off") {
         continue;
       }
-      const item = popItem(pop, profile.label, () => relaySession(session.id, profile.id), { hint: "même conversation" });
-      item.prepend(deckGlyphEl(profile.id, 22));
+      const item = popItem(pop, target.label, () => relaySession(session.id, target.profile.id, target.accountId), { hint: target.hint });
+      item.prepend(deckGlyphEl(target.profile.id, 22));
     }
   }, { align: "right", width: 300 });
 }

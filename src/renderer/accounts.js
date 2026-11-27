@@ -13,6 +13,9 @@ async function refreshAccounts() {
     }
   } catch {}
   renderAccountSelect();
+  if (typeof renderRelayOptions === "function") {
+    renderRelayOptions();
+  }
   for (const session of state.sessions.values()) {
     updateTabAccount(session);
   }
@@ -201,7 +204,7 @@ async function openAccountsModal() {
         });
       }
       button("Renommer", "pencil", async () => {
-        const label = window.prompt("Nom du compte", account.label);
+        const label = await askText({ title: "Renommer le compte", value: account.label, placeholder: "Nom du compte", icon: "user", maxLength: 40 });
         if (label && label.trim()) {
           await window.launcher.renameAccount(account.id, label.trim());
           await refreshAccounts();

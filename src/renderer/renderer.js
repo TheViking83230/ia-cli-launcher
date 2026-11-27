@@ -1165,7 +1165,7 @@ document.addEventListener("click", (event) => {
 }, true);
 
 // --- Fenetre modale generique (meme style que les notes de version) --------
-function createModal({ icon, title, sub, dialogClass = "" }) {
+function createModal({ icon, title, sub, dialogClass = "", onClose = null }) {
   const overlay = document.createElement("div");
   overlay.className = "changelog-modal";
   const dialog = document.createElement("div");
@@ -1200,6 +1200,9 @@ function createModal({ icon, title, sub, dialogClass = "" }) {
   function close() {
     document.removeEventListener("keydown", onKey, true);
     overlay.remove();
+    if (onClose) {
+      onClose();
+    }
   }
   const closeButton = document.createElement("button");
   closeButton.type = "button";
@@ -1217,6 +1220,50 @@ function createModal({ icon, title, sub, dialogClass = "" }) {
   document.addEventListener("keydown", onKey, true);
   document.body.appendChild(overlay);
   return { overlay, dialog, header, body, actions, close };
+}
+
+// Remplace window.prompt (non pris en charge par Electron) : petite fenetre de
+// saisie aux couleurs du logiciel. Renvoie le texte saisi, ou null si annule.
+function askText({ title, value = "", placeholder = "", icon = "pencil", confirmLabel = "Valider", maxLength = 80 }) {
+  return new Promise((resolve) => {
+    let result = null;
+    const modal = createModal({ icon, title, dialogClass: "ask-text-dialog", onClose: () => resolve(result) });
+    const input = document.createElement("input");
+    input.type = "text";
+    input.className = "ask-text-input";
+    input.value = value;
+    input.placeholder = placeholder;
+    input.maxLength = maxLength;
+    modal.body.appendChild(input);
+    const cancel = modal.actions.querySelector("button");
+    cancel.textContent = "Annuler";
+    cancel.className = "ghost-button";
+    const ok = document.createElement("button");
+    ok.type = "button";
+    ok.className = "primary-button";
+    ok.textContent = confirmLabel;
+    const submit = () => {
+      const text = input.value.trim();
+      if (!text) {
+        input.focus();
+        return;
+      }
+      result = text;
+      modal.close();
+    };
+    ok.addEventListener("click", submit);
+    input.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        submit();
+      }
+    });
+    modal.actions.appendChild(ok);
+    setTimeout(() => {
+      input.focus();
+      input.select();
+    }, 0);
+  });
 }
 
 function formatRelativeDate(time) {
@@ -2079,14 +2126,14 @@ function renameActiveSession(title, persist = true) {
   }
 }
 
-function promptRenameSession(id) {
+async function promptRenameSession(id) {
   const session = state.sessions.get(id);
   if (!session) {
     return;
   }
 
-  const title = window.prompt("Nouveau titre de l'onglet", session.title);
-  if (!title) {
+  const title = await askText({ title: "Renommer l'onglet", value: session.title, placeholder: "Nom de l'onglet" });
+  if (!title || !state.sessions.has(id)) {
     return;
   }
 
@@ -2632,6 +2679,12 @@ function focusRenameActive() {
   if (!state.activeSessionId) {
     return;
   }
+  // Interface Command Deck : le champ de titre de l'interface classique est
+  // cache, on ouvre la fenetre de saisie.
+  if (document.body.classList.contains("ui-deck") || !elements.activeTitleInput.offsetParent) {
+    promptRenameSession(state.activeSessionId);
+    return;
+  }
   elements.activeTitleInput.focus();
   elements.activeTitleInput.select();
 }
@@ -2686,13 +2739,51 @@ function renderRelayOptions() {
   placeholder.value = "";
   placeholder.textContent = "Relais →";
   elements.relaySelect.appendChild(placeholder);
-  for (const profile of sortProfiles(state.config.profiles)) {
+  for (const target of relayTargets()) {
     const option = document.createElement("option");
-    option.value = profile.id;
-    option.textContent = profile.label;
+    option.value = target.value;
+    option.textContent = target.label;
     elements.relaySelect.appendChild(option);
   }
   elements.relaySelect.value = "";
+}
+
+// Cibles du relais : chaque CLI, et pour Claude chaque compte quand il y en a
+// plusieurs (passer la main a un autre compte quand le quota est epuise).
+// Sans session, toutes les cibles ; avec, on retire celle deja en cours.
+function relayTargets(session = null) {
+  const currentProfile = session ? sessionProfileId(session) : "";
+  const currentAccount = session ? (session.claudeAccountId || session.spec?.claudeAccountId || accountsState.activeId || "default") : "";
+  const targets = [];
+  for (const profile of sortProfiles(state.config.profiles)) {
+    if (profile.id === "claude" && hasSeveralAccounts()) {
+      for (const account of accountsState.accounts) {
+        if (currentProfile === "claude" && account.id === currentAccount) {
+          continue;
+        }
+        targets.push({
+          value: `claude::${account.id}`,
+          profile,
+          accountId: account.id,
+          label: `${profile.label} · ${account.label}`,
+          hint: account.loggedIn ? (account.email || "autre compte") : "non connecté"
+        });
+      }
+      continue;
+    }
+    if (profile.id === currentProfile) {
+      continue;
+    }
+    targets.push({ value: profile.id, profile, accountId: "", label: profile.label, hint: "même conversation" });
+  }
+  return targets;
+}
+
+// Nom affiche d'une IA dans le relais (avec le compte Claude si plusieurs).
+function relayName(profileId, accountId) {
+  const label = getProfileLabel(profileId);
+  const account = profileId === "claude" ? accountLabelOf(accountId || "default") : "";
+  return label && account ? `${label} (${account})` : label;
 }
 
 // Construit le contexte injecte silencieusement a la nouvelle IA pour qu'elle
@@ -2763,7 +2854,7 @@ function showRelayHistory(session) {
   }, 30);
 }
 
-async function relaySession(id, profileId) {
+async function relaySession(id, profileId, accountId = "") {
   const session = state.sessions.get(id);
   if (!session) {
     return;
@@ -2775,8 +2866,11 @@ async function relaySession(id, profileId) {
     return;
   }
 
-  const fromName = getProfileLabel(session.spec?.profileId) || "l'assistant précédent";
-  flashStatus(`Relais vers ${profile.label}…`);
+  const fromAccount = session.claudeAccountId || session.spec?.claudeAccountId || "";
+  const targetAccount = profile.id === "claude" ? (accountId || fromAccount) : "";
+  const fromName = relayName(session.spec?.profileId, fromAccount) || "l'assistant précédent";
+  const toName = relayName(profile.id, targetAccount) || profile.label;
+  flashStatus(`Relais vers ${toName}…`);
 
   // 1. Capture de la conversation en cours (transcription nettoyee).
   let raw = "";
@@ -2787,10 +2881,10 @@ async function relaySession(id, profileId) {
   // On accumule l'historique a travers les relais successifs (chaque CLI a sa
   // propre transcription) pour ne jamais perdre le fil complet.
   const fullHistory = session.relayHistory
-    ? `${session.relayHistory}\n\n──── ${fromName} → ${profile.label} ────\n\n${segment}`
+    ? `${session.relayHistory}\n\n──── ${fromName} → ${toName} ────\n\n${segment}`
     : segment;
   session.relayHistory = fullHistory;
-  session.relayChain = session.relayChain ? `${session.relayChain} → ${profile.label}` : `${fromName} → ${profile.label}`;
+  session.relayChain = session.relayChain ? `${session.relayChain} → ${toName}` : `${fromName} → ${toName}`;
   const personaText = session.spec?.personaId ? getPersonaById(session.spec.personaId)?.prompt || "" : "";
   const handoff = buildHandoffPrompt(fullHistory, fromName, personaText);
 
@@ -2823,7 +2917,7 @@ async function relaySession(id, profileId) {
       modeLabel: mode.label,
       personaPrompt: handoff,
       personaInjection: profile.personaInjection || null,
-      claudeAccountId: session.spec?.claudeAccountId || session.claudeAccountId || "",
+      claudeAccountId: targetAccount,
       cols: session.terminal.cols,
       rows: session.terminal.rows
     });
@@ -3115,12 +3209,12 @@ async function toggleFavorite() {
 }
 
 async function addCustomProfile() {
-  const label = window.prompt("Nom du CLI");
+  const label = await askText({ title: "Nouveau CLI", placeholder: "Nom du CLI", icon: "plus" });
   if (!label) {
     return;
   }
 
-  const command = window.prompt("Commande a lancer", label.toLowerCase().replace(/\s+/g, "-"));
+  const command = await askText({ title: "Commande à lancer", value: label.toLowerCase().replace(/\s+/g, "-"), icon: "terminal", maxLength: 300 });
   if (!command) {
     return;
   }
@@ -4934,10 +5028,10 @@ function bindEvents() {
   });
 
   elements.relaySelect.addEventListener("change", () => {
-    const targetId = elements.relaySelect.value;
+    const [targetId, accountId = ""] = elements.relaySelect.value.split("::");
     elements.relaySelect.value = "";
     if (targetId && state.activeSessionId) {
-      relaySession(state.activeSessionId, targetId);
+      relaySession(state.activeSessionId, targetId, accountId);
     }
   });
   elements.saveProfileButton.addEventListener("click", saveProfileEdits);
@@ -7814,6 +7908,10 @@ async function pollArtifacts() {
 // Notes de version affichees apres une mise a jour. La cle est le numero de
 // version, la valeur la liste des nouveautes a montrer.
 const CHANGELOG = {
+  "0.1.43": [
+    "Relais vers un autre compte Claude : avec plusieurs comptes, le relais propose chaque compte (ex. « Claude · Max boulot ») pour continuer la conversation sur un autre abonnement quand le quota est épuisé.",
+    "Correctif : renommer un onglet ou un compte Claude fonctionne à nouveau (nouvelle fenêtre de saisie aux couleurs du logiciel, Entrée pour valider, Échap pour annuler)."
+  ],
   "0.1.42": [
     "Nouvel installateur maison pour Windows (IA-CLI-Launcher-Setup) : une fenêtre aux couleurs du logiciel, avec l'icône animée, un petit terminal qui tape les commandes des IA, les options (raccourci Bureau, JARVIS, lancer à la fin) et une vraie barre de progression. Les mises à jour automatiques ne changent pas."
   ],
