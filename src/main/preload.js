@@ -34,6 +34,7 @@ contextBridge.exposeInMainWorld("launcher", {
   setActiveAccount: (id) => ipcRenderer.invoke("accounts:set-active", id),
   removeAccount: (id, deleteFiles) => ipcRenderer.invoke("accounts:remove", { id, deleteFiles }),
   readClaudeChat: (request) => ipcRenderer.invoke("claude:chat", request),
+  shareClaudeConversation: (tabId, targetAccountId) => ipcRenderer.invoke("claude:share-conversation", { tabId, targetAccountId }),
   checkCommand: (command) => ipcRenderer.invoke("system:check-command", command),
   dirExists: (dirPath) => ipcRenderer.invoke("system:dir-exists", dirPath),
   openUrl: (url) => ipcRenderer.invoke("system:open-url", url),

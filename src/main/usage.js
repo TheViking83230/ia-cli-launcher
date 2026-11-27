@@ -7,6 +7,7 @@
 // - Codex : les fichiers de session (~/.codex/sessions/**/rollout-*.jsonl)
 //   contiennent des evenements "token_count" avec les rate_limits du compte.
 // - Les autres CLI n'exposent pas de quota exploitable.
+const crypto = require("node:crypto");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
@@ -77,6 +78,26 @@ function readClaudeToken(accountId) {
   return { accessToken: oauth.accessToken, expiresAt: Number(oauth.expiresAt) || 0 };
 }
 
+// Identite du compte reellement connecte dans ce dossier (change apres un
+// /login sur un autre abonnement) : le quota en cache n'est valable que pour
+// elle. Compte Anthropic si connu, sinon empreinte du jeton (jamais le jeton).
+function claudeIdentity(accountId) {
+  const configDir = claudeAccounts.configDirFor(accountId);
+  const globalFile = accountId === claudeAccounts.DEFAULT_ID && !process.env.CLAUDE_CONFIG_DIR
+    ? path.join(os.homedir(), ".claude.json")
+    : path.join(configDir, ".claude.json");
+  const oauth = readJson(globalFile)?.oauthAccount;
+  const uuid = oauth?.accountUuid || oauth?.emailAddress || "";
+  const token = readClaudeToken(accountId);
+  if (!token) {
+    return "";
+  }
+  if (uuid) {
+    return `acct:${uuid}`;
+  }
+  return `tok:${crypto.createHash("sha256").update(token.accessToken).digest("hex").slice(0, 16)}`;
+}
+
 function claudeWindows(data) {
   const entries = [
     ["five_hour", "5 h"],
@@ -113,6 +134,10 @@ function loadSharedCache(claudeCache) {
   if (!shared) {
     return;
   }
+  // Cache ecrit pour un autre compte (changement de compte) : ignore.
+  if ((shared.identity || "") !== (claudeCache.identity || "")) {
+    return;
+  }
   if (shared.data && (shared.fetchedAt || 0) > claudeCache.fetchedAt) {
     claudeCache.data = shared.data;
     claudeCache.fetchedAt = shared.fetchedAt;
@@ -128,6 +153,7 @@ function loadSharedCache(claudeCache) {
 function saveSharedCache(claudeCache) {
   try {
     fs.writeFileSync(sharedCacheFile(claudeCache.accountId), JSON.stringify({
+      identity: claudeCache.identity || "",
       data: claudeCache.data,
       fetchedAt: claudeCache.fetchedAt,
       nextFetchAt: claudeCache.nextFetchAt,
@@ -202,6 +228,17 @@ async function requestClaudeUsage(claudeCache) {
 
 async function getClaudeUsage(accountId) {
   const claudeCache = cacheFor(claudeAccounts.resolveId(accountId));
+  // Autre compte connecte qu'au dernier releve (/login, connexion du compte) :
+  // on oublie l'ancien quota et on interroge tout de suite.
+  const identity = claudeIdentity(claudeCache.accountId);
+  if (identity !== (claudeCache.identity || "")) {
+    claudeCache.identity = identity;
+    claudeCache.data = null;
+    claudeCache.fetchedAt = 0;
+    claudeCache.nextFetchAt = 0;
+    claudeCache.backoffMs = 0;
+    claudeCache.error = "";
+  }
   if (Date.now() >= claudeCache.nextFetchAt) {
     // Un seul appel en vol, partage par toutes les demandes simultanees.
     if (!claudeCache.pending) {

@@ -2868,6 +2868,14 @@ async function relaySession(id, profileId, accountId = "") {
 
   const fromAccount = session.claudeAccountId || session.spec?.claudeAccountId || "";
   const targetAccount = profile.id === "claude" ? (accountId || fromAccount) : "";
+  // Compte jamais connecte : la nouvelle IA s'arreterait sur l'ecran de
+  // connexion et la conversation serait perdue. On fait connecter d'abord.
+  const targetAccountInfo = targetAccount ? accountById(targetAccount) : null;
+  if (targetAccountInfo && !targetAccountInfo.loggedIn) {
+    flashStatus(`Le compte « ${targetAccountInfo.label} » n'est pas connecté : connecte-le d'abord (Comptes Claude → Connecter).`);
+    openAccountsModal();
+    return;
+  }
   const fromName = relayName(session.spec?.profileId, fromAccount) || "l'assistant précédent";
   const toName = relayName(profile.id, targetAccount) || profile.label;
   flashStatus(`Relais vers ${toName}…`);
@@ -2888,9 +2896,43 @@ async function relaySession(id, profileId, accountId = "") {
   const personaText = session.spec?.personaId ? getPersonaById(session.spec.personaId)?.prompt || "" : "";
   const handoff = buildHandoffPrompt(fullHistory, fromName, personaText);
 
+  // Claude vers un autre compte Claude : on partage la VRAIE conversation
+  // (copiee dans le dossier du compte cible) et le nouveau compte la reprend
+  // avec tout son contexte (claude --resume), comme si de rien n'etait.
+  let resumeId = "";
+  const sameAccount = (fromAccount || "default") === (targetAccount || "default");
+  if (sessionProfileId(session) === "claude" && profile.id === "claude" && !sameAccount) {
+    try {
+      const shared = await window.launcher.shareClaudeConversation(session.id, targetAccount);
+      if (shared?.ok && /^[0-9a-f-]{36}$/i.test(shared.conversationId || "")) {
+        resumeId = shared.conversationId;
+      }
+    } catch {}
+  }
+
   // 2. Historique conserve dans un panneau HTML AU-DESSUS du terminal : la CLI
   //    plein ecran qui prend le relais efface le terminal, mais pas ce panneau.
-  showRelayHistory(session);
+  //    Inutile quand la conversation est reprise telle quelle.
+  if (!resumeId) {
+    showRelayHistory(session);
+  }
+
+  // Fil de la vue chat (conversation Claude) conserve pour l'afficher au-dessus
+  // de la nouvelle conversation ; texte brut pour les autres CLI.
+  let previousTurns = null;
+  if (resumeId) {
+    // Conversation reprise : la vue chat la relit en entier, rien a ajouter.
+  } else if (sessionProfileId(session) === "claude") {
+    try {
+      const chat = await window.launcher.readClaudeChat({ tabId: session.id, since: 0 });
+      if (Array.isArray(chat?.turns) && chat.turns.length) {
+        previousTurns = chat.turns;
+      }
+    } catch {}
+  }
+  if (!resumeId) {
+    session.relaySegments = [...(session.relaySegments || []), { from: fromName, to: toName, turns: previousTurns, text: previousTurns ? "" : segment }];
+  }
 
   // 3. On coupe le message de fin de process pour ce relais.
   session.relaying = true;
@@ -2910,12 +2952,14 @@ async function relaySession(id, profileId, accountId = "") {
       modeArgs: mode.args || [],
       preLaunchCommands: mode.preLaunchCommands || [],
       extraArgs: "",
+      // Reprise de la conversation partagee (meme mecanisme que la restauration).
+      ...(resumeId ? { resumeArgs: ["--resume", resumeId], stripArgs: "--continue -c", conversationId: resumeId } : {}),
       cwd: session.cwd,
       profileId: profile.id,
       profileLabel: profile.label,
       modeId: mode.id,
       modeLabel: mode.label,
-      personaPrompt: handoff,
+      personaPrompt: resumeId ? personaText || "" : handoff,
       personaInjection: profile.personaInjection || null,
       claudeAccountId: targetAccount,
       cols: session.terminal.cols,
@@ -2930,7 +2974,10 @@ async function relaySession(id, profileId, accountId = "") {
 
   // 6. On rebranche le MÊME onglet/terminal sur le nouveau process (nouvel id).
   // Contexte gardé pour le réinjecter si cette IA est redémarrée plus tard.
-  session.handoffPrompt = handoff;
+  session.handoffPrompt = resumeId ? "" : handoff;
+  if (resumeId) {
+    flashStatus(`${toName} reprend la conversation avec tout le travail de ${fromName}.`);
+  }
   rebindSession(session, id, startResult, profile, {
     kind: "profile",
     title: session.title,
@@ -2949,6 +2996,14 @@ async function relaySession(id, profileId, accountId = "") {
     session.hasOutput = false;
     sendFirstMessage(session, handoff);
   }
+  // Quota du compte / de l'IA qui a pris le relais, sans attendre le releve.
+  if (typeof updateTabAccount === "function") {
+    updateTabAccount(session);
+  }
+  if (session.chat) {
+    renderChatRelay(session);
+  }
+  refreshUsageBar();
 }
 
 // Rebranche un onglet existant (meme terminal xterm) sur un nouveau process.
@@ -7908,6 +7963,12 @@ async function pollArtifacts() {
 // Notes de version affichees apres une mise a jour. La cle est le numero de
 // version, la valeur la liste des nouveautes a montrer.
 const CHANGELOG = {
+  "0.1.44": [
+    "Relais entre comptes Claude : le compte qui prend la main reprend la vraie conversation (copiée dans son dossier), avec tout le travail et le contexte du compte précédent.",
+    "Vue chat : après un relais vers une autre IA, la conversation précédente reste affichée en haut, suivie d'un séparateur « Relais ».",
+    "Correctif : la limite 5 h / 7 j suit le compte Claude réellement connecté (changement de compte, /login) et se met à jour dès le relais.",
+    "Relais vers un compte Claude non connecté : bloqué, la fenêtre Comptes Claude s'ouvre pour le connecter d'abord."
+  ],
   "0.1.43": [
     "Relais vers un autre compte Claude : avec plusieurs comptes, le relais propose chaque compte (ex. « Claude · Max boulot ») pour continuer la conversation sur un autre abonnement quand le quota est épuisé.",
     "Correctif : renommer un onglet ou un compte Claude fonctionne à nouveau (nouvelle fenêtre de saisie aux couleurs du logiciel, Entrée pour valider, Échap pour annuler)."

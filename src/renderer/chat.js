@@ -266,7 +266,7 @@ function updateChatList(view, turns) {
     list.insertBefore(el, view.typing);
     view.rendered.push(el);
   }
-  view.empty.classList.toggle("hidden", turns.length > 0);
+  view.empty.classList.toggle("hidden", turns.length > 0 || Boolean(view.relayCount));
   createIcons();
   if (atBottom || view.stickBottom) {
     view.stickBottom = false;
@@ -937,8 +937,56 @@ async function pollChat(session) {
     }
   } catch {}
   view.polling = false;
+  renderChatRelay(session);
   renderChatStatus(session);
   renderChatPrompt(session);
+}
+
+// Conversation d'avant un relais (autre compte ou autre IA) : affichee en tete
+// de la vue chat, suivie d'un separateur, pour garder le fil complet.
+function renderChatRelay(session) {
+  const view = session.chat;
+  if (!view) {
+    return;
+  }
+  const segments = session.relaySegments || [];
+  const key = segments.length;
+  if (view.relayCount === key) {
+    return;
+  }
+  view.relayCount = key;
+  for (const el of view.list.querySelectorAll(".chat-relay-block")) {
+    el.remove();
+  }
+  let anchor = view.empty.nextSibling;
+  const insert = (el) => {
+    el.classList.add("chat-relay-block");
+    view.list.insertBefore(el, anchor);
+  };
+  for (const segment of segments) {
+    if (segment.turns?.length) {
+      for (const turn of segment.turns) {
+        insert(renderChatTurn(turn));
+      }
+    } else if (segment.text) {
+      const card = document.createElement("details");
+      card.className = "chat-relay-card";
+      const summary = document.createElement("summary");
+      summary.textContent = `Conversation avec ${segment.from}`;
+      const body = document.createElement("pre");
+      body.textContent = segment.text;
+      card.append(summary, body);
+      insert(card);
+    }
+    const sep = document.createElement("div");
+    sep.className = "chat-relay-sep";
+    sep.innerHTML = '<i data-lucide="repeat"></i><span></span>';
+    sep.querySelector("span").textContent = `Relais : ${segment.from} → ${segment.to}`;
+    insert(sep);
+  }
+  view.empty.classList.toggle("hidden", key > 0 || view.rendered.length > 0);
+  createIcons();
+  view.list.scrollTop = view.list.scrollHeight;
 }
 
 function setChatView(session, open, remember = true) {

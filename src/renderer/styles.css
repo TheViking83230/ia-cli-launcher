@@ -5206,3 +5206,39 @@ body.ui-deck .chat-model-option.on {
 }
 .ask-text-input:focus { border-color: var(--accent, #2dd4bf); box-shadow: 0 0 0 3px rgba(45, 212, 191, 0.18); }
 .ask-text-dialog .changelog-actions { display: flex; gap: 8px; justify-content: flex-end; }
+
+/* Vue chat : conversation d'avant un relais */
+.chat-relay-sep {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 14px auto;
+  padding: 5px 12px;
+  width: fit-content;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--muted, #8b93a1);
+  font-size: 12px;
+}
+.chat-relay-sep svg { width: 14px; height: 14px; }
+.chat-relay-card {
+  margin: 8px 0;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.03);
+}
+.chat-relay-card summary {
+  cursor: pointer;
+  padding: 8px 12px;
+  color: var(--muted, #8b93a1);
+  font-size: 12.5px;
+}
+.chat-relay-card pre {
+  margin: 0;
+  padding: 8px 12px 12px;
+  max-height: 360px;
+  overflow: auto;
+  white-space: pre-wrap;
+  font-size: 12px;
+}

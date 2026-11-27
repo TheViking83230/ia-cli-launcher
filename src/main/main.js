@@ -1590,6 +1590,37 @@ app.whenReady().then(() => {
 
   ipcMain.handle("claude:conversations", () => claudeHistory.listConversations());
 
+  // Relais entre comptes Claude : copie la conversation de l'onglet (et ses
+  // pieces jointes) dans le dossier du compte cible, qui peut alors la
+  // reprendre telle quelle (claude --resume) avec tout son contexte.
+  ipcMain.handle("claude:share-conversation", async (_event, { tabId, targetAccountId } = {}) => {
+    const session = sessions.get(tabId);
+    if (!session || session.profileId !== "claude") {
+      return { ok: false };
+    }
+    try {
+      const live = await conversation.getClaudeFile({ profileId: session.profileId, pid: session.pty.pid, cwd: session.cwd });
+      const file = live?.file || "";
+      if (!file || !fs.existsSync(file)) {
+        return { ok: false };
+      }
+      const targetDir = claudeAccounts.configDirFor(claudeAccounts.resolveId(targetAccountId));
+      const projectDir = path.join(targetDir, "projects", path.basename(path.dirname(file)));
+      const target = path.join(projectDir, path.basename(file));
+      if (path.resolve(target) !== path.resolve(file)) {
+        fs.mkdirSync(projectDir, { recursive: true });
+        fs.copyFileSync(file, target);
+        const extras = file.replace(/\.jsonl$/, "");
+        if (fs.existsSync(extras) && fs.statSync(extras).isDirectory()) {
+          fs.cpSync(extras, path.join(projectDir, path.basename(extras)), { recursive: true, force: true });
+        }
+      }
+      return { ok: true, conversationId: live.conversationId };
+    } catch (error) {
+      return { ok: false, error: String(error?.message || error) };
+    }
+  });
+
   // Vue chat : messages de la conversation Claude d'un onglet, ou d'une
   // conversation passee (explorateur). since = version deja affichee.
   ipcMain.handle("claude:chat", async (_event, { tabId, conversationId, cwd, since } = {}) => {
